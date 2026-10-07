@@ -23,12 +23,13 @@ _Last updated: 2026-10-07_
 
 | Item | State |
 | --- | --- |
-| Phase | Phase 1 (streaming chat page) built and passing tests, **not yet committed**. Phase 2 not started. |
-| Last commit | `cd39644` Phase 0: project skeleton (2026-10-06) |
-| Uncommitted | `app.py` (modified); `Docs/`, `conftest.py`, `planner/`, `tests/` (untracked) |
+| Phase | Phase 1 (streaming chat page) **complete** and verified (tests, live model call, server boot); committed as "Phase 1: streaming chat page" (see `git log`). Phase 2 not started. |
+| Last commit | "Phase 1: streaming chat page" (2026-10-07); before that `bf58edf` Added HLD, LLD and architecture docs (`Docs/Architecture.md`, `HLD.md`, `LLD.md`, `Worklog.md`); before that `cd39644` Phase 0: project skeleton (2026-10-06) |
+| Uncommitted | Nothing |
 | Python | 3.12.15 in `.venv` (managed by uv); `requires-python >= 3.12` |
+| Dev packages | pytest 9.1.1 (`[dependency-groups] dev`) |
 | Key packages | langgraph 1.2.14, langgraph-checkpoint 4.2.0, langgraph-checkpoint-postgres 3.1.2, langchain-core 1.6.6, langchain-openai 1.6.7, streamlit 1.65.0, psycopg 3.3.6, psycopg-pool 3.3.3 |
-| Tests | 1 test, passes in the project venv (`tests/test_app.py::test_chat_round_trip`, 10.6 s) |
+| Tests | 4 tests in `tests/test_app.py`, all pass with `uv run pytest` (5.6 s) |
 | Secrets present locally | `HF_TOKEN`, `LLM_MODEL`, `LLM_BASE_URL`, `SERPAPI_KEY`, `OPENTRIPMAP_KEY`, `GEOAPIFY_KEY`, `DATABASE_URL` in `.streamlit/secrets.toml` (gitignored, checked) |
 
 ### Phase map
@@ -38,7 +39,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | Phase | Scope (from the docs) | Status |
 | --- | --- | --- |
 | 0 | Project skeleton: uv project, Streamlit hello page | Done, committed `cd39644` |
-| 1 | `planner/llm.py` on the HF router; `app.py` streaming chat; secrets `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | Done, uncommitted |
+| 1 | `planner/llm.py` on the HF router with the LLD limits; `app.py` streaming chat sending the last 20 messages; error message and retype on failure; secrets `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | Done and committed 2026-10-07 |
 | 2 | LangGraph engine (`graph/state.py`, `graph/build.py`, `nodes/chat.py`, `nodes/orchestrator.py`), `planner/db.py` checkpointer on Neon, trip id in URL, Retry button, AppTest | Not started |
 | 3 | Not defined in the docs | — |
 | 4 | Scoring weights tuned by hand (`scoring.py`) | Not started |
@@ -49,11 +50,11 @@ The design docs name phases but don't list them all. This table is what can be r
 
 | # | Issue | Status |
 | --- | --- | --- |
-| 1 | `pytest` is not a project dependency, so a bare `pytest` runs the global Python 3.11 install and the AppTest times out | Open |
+| 1 | `pytest` is not a project dependency, so a bare `pytest` runs the global Python 3.11 install and the AppTest times out | Fixed 2026-10-07 |
 | 2 | Doc cross-links use lowercase names (`hld.md`, `lld.md`, `architecture.md`) but the files are `HLD.md`, `LLD.md`, `Architecture.md`; links break on GitHub | Open |
 | 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Open |
 | 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Open |
-| 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Open |
+| 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Fixed 2026-10-07; writing the token counts to `usage` waits for the Phase 2 database |
 | 6 | `uv` cannot reach PyPI on this machine without `--system-certs` (TLS `UnknownIssuer`) | Open (environment) |
 
 ---
@@ -172,3 +173,49 @@ Design notes to keep in mind when building (not bugs yet):
 1. Approve and apply the fixes for open issues 1 to 3.
 2. Commit Phase 1 (`app.py`, `planner/`, `tests/`, `conftest.py`, `Docs/`).
 3. Start Phase 2: `planner/graph/state.py`, `nodes/chat.py` (`greet`, `wait_for_user`, `chat`), `nodes/orchestrator.py`, `graph/build.py`, `planner/db.py` with `PostgresSaver` on the Neon `dev` branch, trip id in `?trip=`, Retry button, and AppTest coverage.
+
+---
+
+## 2026-10-07: Phase 1 completed
+
+**Goal**
+Finish Phase 1 before starting Phase 2: bring `planner/llm.py` and `app.py` in line with the LLD.md limits, make the test suite run in the project's own environment, cover the error path, and check the app against the real model.
+
+**Changes**
+- `pyproject.toml`: new `[dependency-groups]` table with `dev = ["pytest>=9.1.1"]`, added by `uv add --system-certs --dev pytest`. Runtime dependencies unchanged.
+- `uv.lock`: +60 lines for pytest 9.1.1 and its dependencies (iniconfig, pluggy, pygments, and others).
+- `requirements.txt`: unchanged. pytest is a dev-only dependency, and Streamlit Cloud doesn't need it.
+- `planner/llm.py`:
+  - New constant `MAX_HISTORY = 20`, the "last 20 messages sent" limit from LLD.md.
+  - `ChatOpenAI` now also sets `timeout=60`, `max_retries=2` and `stream_usage=True`. Existing settings are unchanged: `base_url`, `api_key`, `model` from `st.secrets`, `temperature=0.7`, `streaming=True`.
+- `app.py`:
+  - Imports `MAX_HISTORY` along with `get_llm`.
+  - The model now gets `[SystemMessage(SYSTEM_PROMPT), *messages[-MAX_HISTORY:]]` instead of the whole history. The full history still stays in `st.session_state.messages` and is all shown on screen.
+- `tests/test_app.py`, rewritten from 1 test to 4:
+  - Shared `APP = "../app.py"` and `TIMEOUT = 30`, passed to `AppTest.from_file(..., default_timeout=TIMEOUT)`. The first script run imports LangChain, which can take longer than AppTest's 3 s default (the failure seen earlier).
+  - `RecordingModel`: a `FakeListChatModel` that saves the messages from each `_stream` call. `FailingModel`: a `FakeListChatModel` whose `_stream` raises `TimeoutError`.
+  - `test_chat_round_trip`: unchanged behaviour, now with the longer timeout.
+  - `test_model_error_drops_message_and_allows_retry`: if the model fails, there is no exception, the error box shows "The model call failed", and only the greeting is left in history. Retyping the same message with a working model then gives 3 messages.
+  - `test_only_recent_history_is_sent`: after 12 user turns (25 messages before the last call), the model gets the system message plus exactly 20 messages, and the last one is the newest user message.
+  - `test_llm_client_settings`: patches `st.secrets` with dummy values, clears the `cache_resource` cache, and checks model name, base URL, `request_timeout == 60`, `max_retries == 2`, `streaming` and `stream_usage` are on, and that a second call returns the same cached object. It clears the cache again at the end so other tests are unaffected.
+
+**Decisions**
+- Kept `stream_usage=True` now, although nothing records the counts yet. The live check below shows the HF router accepts it and sends counts on the last chunk. Writing them to the `usage` table needs `DATABASE_URL` and the tables, which are Phase 2.
+- Trimmed history only in what goes to the model, not in what is stored or shown. Phase 2 moves history into the LangGraph state anyway.
+- Left the doc link fixes and `architecture.png` (open issues 2 and 3) and the LLD.md status line (open issue 4) for later, as asked: Phase 1 code first.
+- Committed on 2026-10-07 at the user's request, straight to `main` like the earlier commits, with the message "Phase 1: streaming chat page". This worklog was updated in the same commit, so its own hash can't appear here; run `git log --oneline` to see it.
+
+**Verification**
+- `uv run pytest -q` → **4 passed in 5.55 s**. `uv run pytest` now uses pytest from `.venv` (Python 3.12.15), not the global 3.11 copy.
+- Live call: `get_llm().stream([HumanMessage("Reply with exactly: ready")])` with the real secrets → reply `'ready'`, first token after 1.26 s, usage on the last chunk `{'input_tokens': 72, 'output_tokens': 34, 'total_tokens': 106, ..., 'output_token_details': {'reasoning': 23}}`. So the router accepts `stream_usage`, and GPT-OSS-120B uses reasoning tokens that count toward output.
+- Server boot: `uv run streamlit run app.py --server.headless true --server.port 8599` → `/_stcore/health` returned `ok` after 2 s, no errors or tracebacks in the log. The server was stopped afterwards.
+- Not checked: a chat typed by hand in a browser. The AppTest runs and the live call cover the same code path, but the user may want one manual look at `uv run streamlit run app.py`.
+
+**Issues found**
+- Reasoning tokens: GPT-OSS-120B spent 23 of 34 output tokens on reasoning for a one-word reply. Worth watching for cost and first-token delay once replies get longer. Status: note only.
+- Open issue 1 fixed; open issue 5 fixed except for logging, which waits for Phase 2.
+
+**Next steps**
+1. ~~Commit Phase 1~~ Done.
+2. Fix open issues 2 to 4 (doc links, missing PNG, LLD.md status line).
+3. Start Phase 2 (see the previous entry's next steps).
