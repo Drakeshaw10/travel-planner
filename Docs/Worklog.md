@@ -24,7 +24,8 @@ _Last updated: 2026-10-07_
 | Item | State |
 | --- | --- |
 | Phase | Phase 1 (streaming chat page) **complete** and verified (tests, live model call, server boot); committed as "Phase 1: streaming chat page" (see `git log`). Phase 2 not started. |
-| Last commit | "Phase 1: streaming chat page" (2026-10-07); before that `bf58edf` Added HLD, LLD and architecture docs (`Docs/Architecture.md`, `HLD.md`, `LLD.md`, `Worklog.md`); before that `cd39644` Phase 0: project skeleton (2026-10-06) |
+| Branches | Work happens on `dev`; `main` deploys to Streamlit Cloud on push. `dev` is at `21a074d` (1 ahead of `origin/dev`, not pushed); `main` = `origin/main` = `bf58edf` |
+| Last commit | `21a074d` "Phase 1: streaming chat page" on `dev` (2026-10-07); before that `bf58edf` Added HLD, LLD and architecture docs (`Docs/Architecture.md`, `HLD.md`, `LLD.md`, `Worklog.md`); before that `cd39644` Phase 0: project skeleton (2026-10-06) |
 | Uncommitted | Nothing |
 | Python | 3.12.15 in `.venv` (managed by uv); `requires-python >= 3.12` |
 | Dev packages | pytest 9.1.1 (`[dependency-groups] dev`) |
@@ -203,7 +204,7 @@ Finish Phase 1 before starting Phase 2: bring `planner/llm.py` and `app.py` in l
 - Kept `stream_usage=True` now, although nothing records the counts yet. The live check below shows the HF router accepts it and sends counts on the last chunk. Writing them to the `usage` table needs `DATABASE_URL` and the tables, which are Phase 2.
 - Trimmed history only in what goes to the model, not in what is stored or shown. Phase 2 moves history into the LangGraph state anyway.
 - Left the doc link fixes and `architecture.png` (open issues 2 and 3) and the LLD.md status line (open issue 4) for later, as asked: Phase 1 code first.
-- Committed on 2026-10-07 at the user's request, straight to `main` like the earlier commits, with the message "Phase 1: streaming chat page". This worklog was updated in the same commit, so its own hash can't appear here; run `git log --oneline` to see it.
+- Committed on 2026-10-07 at the user's request, on the `dev` branch (commit `21a074d`, "Phase 1: streaming chat page"). `main` and `origin/main` stay at `bf58edf`, so the deployed app is unchanged until `dev` is merged and pushed. (A first version of this note wrongly said `main`.) This worklog was updated in the same commit, so its own hash can't appear here; run `git log --oneline` to see it.
 
 **Verification**
 - `uv run pytest -q` → **4 passed in 5.55 s**. `uv run pytest` now uses pytest from `.venv` (Python 3.12.15), not the global 3.11 copy.
