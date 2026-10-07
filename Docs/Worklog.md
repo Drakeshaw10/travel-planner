@@ -23,14 +23,15 @@ _Last updated: 2026-10-07_
 
 | Item | State |
 | --- | --- |
-| Phase | Phase 1 (streaming chat page) **complete** and verified (tests, live model call, server boot); committed as "Phase 1: streaming chat page" (see `git log`). Phase 2 not started. |
-| Branches | Work happens on `dev`; `main` deploys to Streamlit Cloud on push. `dev` is at `21a074d` (1 ahead of `origin/dev`, not pushed); `main` = `origin/main` = `bf58edf` |
+| Phase | Phase 2 (durable chat loop: LangGraph + Neon checkpointer) **complete** and verified against real Neon and the real model; committed on `dev` as "Phase 2: durable chat loop on LangGraph and Neon" and pushed (see `git log`). Phase 1 is `21a074d`. |
+| Branches | Work happens on `dev`; `main` deploys to Streamlit Cloud on push. `dev` = `origin/dev` = the Phase 2 commit (pushed 2026-10-07); `main` = `origin/main` = `bf58edf` |
 | Last commit | `21a074d` "Phase 1: streaming chat page" on `dev` (2026-10-07); before that `bf58edf` Added HLD, LLD and architecture docs (`Docs/Architecture.md`, `HLD.md`, `LLD.md`, `Worklog.md`); before that `cd39644` Phase 0: project skeleton (2026-10-06) |
 | Uncommitted | Nothing |
 | Python | 3.12.15 in `.venv` (managed by uv); `requires-python >= 3.12` |
 | Dev packages | pytest 9.1.1 (`[dependency-groups] dev`) |
 | Key packages | langgraph 1.2.14, langgraph-checkpoint 4.2.0, langgraph-checkpoint-postgres 3.1.2, langchain-core 1.6.6, langchain-openai 1.6.7, streamlit 1.65.0, psycopg 3.3.6, psycopg-pool 3.3.3 |
-| Tests | 4 tests in `tests/test_app.py`, all pass with `uv run pytest` (5.6 s) |
+| Tests | 23 pass + 1 skipped with `uv run pytest` (5.3 s, offline). The skipped one is `tests/test_integration.py`; it passes with `RUN_INTEGRATION=1` (29 s, real Neon + model) |
+| Database | Neon, pooled endpoint (`-pooler` host, `sslmode` and `channel_binding` set). LangGraph checkpoint tables created by `PostgresSaver.setup()` on 2026-10-07. Which Neon branch the local `DATABASE_URL` points at (`dev` or `main`) was not checked |
 | Secrets present locally | `HF_TOKEN`, `LLM_MODEL`, `LLM_BASE_URL`, `SERPAPI_KEY`, `OPENTRIPMAP_KEY`, `GEOAPIFY_KEY`, `DATABASE_URL` in `.streamlit/secrets.toml` (gitignored, checked) |
 
 ### Phase map
@@ -41,7 +42,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | --- | --- | --- |
 | 0 | Project skeleton: uv project, Streamlit hello page | Done, committed `cd39644` |
 | 1 | `planner/llm.py` on the HF router with the LLD limits; `app.py` streaming chat sending the last 20 messages; error message and retype on failure; secrets `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | Done and committed 2026-10-07 |
-| 2 | LangGraph engine (`graph/state.py`, `graph/build.py`, `nodes/chat.py`, `nodes/orchestrator.py`), `planner/db.py` checkpointer on Neon, trip id in URL, Retry button, AppTest | Not started |
+| 2 | LangGraph engine (`graph/state.py`, `graph/build.py`, `nodes/chat.py`, `nodes/orchestrator.py`), `planner/db.py` checkpointer on Neon, trip id in URL, Retry button, AppTest | Done, committed and pushed on `dev` 2026-10-07. Walkthrough: [Phase2-Guide.md](Phase2-Guide.md) |
 | 3 | Not defined in the docs | — |
 | 4 | Scoring weights tuned by hand (`scoring.py`) | Not started |
 | 5 | Not defined in the docs | — |
@@ -53,10 +54,10 @@ The design docs name phases but don't list them all. This table is what can be r
 | --- | --- | --- |
 | 1 | `pytest` is not a project dependency, so a bare `pytest` runs the global Python 3.11 install and the AppTest times out | Fixed 2026-10-07 |
 | 2 | Doc cross-links use lowercase names (`hld.md`, `lld.md`, `architecture.md`) but the files are `HLD.md`, `LLD.md`, `Architecture.md`; links break on GitHub | Open |
-| 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Open |
-| 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Open |
+| 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Fixed 2026-10-07: the user added `Docs/architecture.png` (name matches both links) |
+| 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Mostly resolved by Phase 2 (all files marked "(Phase 2)" now exist). Remaining gaps: the layout roots at `travel-planner/` and lists a `ui/` package that doesn't exist yet (rendering is still in `app.py`); there is no `ui/debug.py` sidebar inspector |
 | 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Fixed 2026-10-07; writing the token counts to `usage` waits for the Phase 2 database |
-| 6 | `uv` cannot reach PyPI on this machine without `--system-certs` (TLS `UnknownIssuer`) | Open (environment) |
+| 6 | `uv` cannot reach PyPI without `--system-certs` (TLS `UnknownIssuer`), and `git push` fails with "unable to get local issuer certificate" unless run as `git -c http.sslBackend=schannel push`. Permanent git fix: `git config --global http.sslBackend schannel` | Open (environment) |
 
 ---
 
@@ -220,3 +221,122 @@ Finish Phase 1 before starting Phase 2: bring `planner/llm.py` and `app.py` in l
 1. ~~Commit Phase 1~~ Done.
 2. Fix open issues 2 to 4 (doc links, missing PNG, LLD.md status line).
 3. Start Phase 2 (see the previous entry's next steps).
+
+---
+
+## 2026-10-07: Branch fix recorded, dev pushed
+
+**Goal**
+Correct the worklog's branch record, then commit and push `dev`.
+
+**Changes**
+- `Docs/Worklog.md`: the Phase 1 entry now says the commit is on `dev`, not `main`, and a Branches row was added to the status table. Committed on `dev` as `94b3e22` "Worklog: record that Phase 1 was committed on dev".
+- After the push, this file was updated again: this entry, the Branches row (now pushed) and open issue 6 (git TLS). These edits are **not committed** yet and go in with the next commit on `dev`.
+
+**Decisions**
+- Pushed `dev` only. `main` was not merged or pushed, so the deployed app is unchanged.
+- To get past the certificate error, used `-c http.sslBackend=schannel` for this one push, so git checks certificates against the Windows store. Did not turn off SSL verification, and did not change global git config.
+
+**Verification**
+- `git push origin dev` → `fatal: unable to access 'https://github.com/Drakeshaw10/travel-planner/': SSL certificate problem: unable to get local issuer certificate`.
+- `git -c http.sslBackend=schannel push origin dev` → `bf58edf..94b3e22  dev -> dev`. `git status -sb` → `## dev...origin/dev`, in sync.
+- Branches afterwards: `dev` = `origin/dev` = `94b3e22`; `main` = `origin/main` = `bf58edf`.
+
+**Issues found**
+- git has the same TLS certificate problem as uv (open issue 6, updated). Status: open, environment only.
+
+**Next steps**
+1. Optionally run `git config --global http.sslBackend schannel` so plain `git push` works.
+2. Fix open issues 2 to 4 (doc links, missing PNG, LLD.md status line), or start Phase 2.
+
+---
+
+## 2026-10-07: Phase 2, durable chat loop on LangGraph and Neon
+
+**Goal**
+Replace Phase 1's in-memory chat with the LangGraph engine from LLD.md, with state checkpointed to Neon after every step. Wanted: a trip id in the URL that reopens the conversation, a Retry button that resumes a failed run from its checkpoint, and tests at every layer. The user asked for code they can learn from, so every file explains *why* it is written that way, and there is a walkthrough doc.
+
+**Changes**
+- `planner/graph/__init__.py`, `planner/graph/nodes/__init__.py`: new package markers, each with a one-line docstring.
+- `planner/graph/state.py` (new): `TravelState` exactly as in LLD.md. `messages` uses the `add_messages` reducer; every other key is `NotRequired`, and the keys for later phases are declared now. Type alias `Phase`. The docstring explains why state is plain JSON and not Pydantic objects.
+- `planner/graph/nodes/orchestrator.py` (new): `route(state)` as in LLD.md: `discovery` → `profiler`, `constraints` → `constraints`, anything else → `chat`, and no phase counts as `discovery`. Uses `match`. The other routers from LLD.md (`after_constraints`, `after_feasibility`, `after_budget`) are not added until their nodes exist.
+- `planner/graph/nodes/chat.py` (new):
+  - `GREETING` and `SYSTEM_PROMPT` moved here from `app.py`, text unchanged.
+  - `greet`: returns the greeting and `phase="discovery"`; no LLM call.
+  - `wait_for_user`: `interrupt("waiting_for_user")`; checks that the resume value is a non-empty `str` (raises `ValueError` otherwise); strips it; appends a `HumanMessage`; increments `user_turns`. The docstring explains how `interrupt` re-runs the node.
+  - `make_chat(llm)`: a factory returning the `chat` node, which calls `llm.invoke([SystemMessage, *messages[-MAX_HISTORY:]])` and returns the reply.
+- `planner/graph/build.py` (new):
+  - `STREAMING_NODES = {"chat", "writer"}`.
+  - `ROUTE_MAP` maps `route()`'s `profiler` and `constraints` answers to `chat` until those nodes exist.
+  - `build_graph(llm, checkpointer)`: nodes `greet`, `wait_for_user`, `chat`; edges START → greet → wait_for_user, conditional `route` with `ROUTE_MAP`, chat → wait_for_user; `compile(checkpointer=...)`.
+- `planner/db.py` (new):
+  - `get_pool()` (`@st.cache_resource`): `ConnectionPool(DATABASE_URL, min_size=1, max_size=5, kwargs={autocommit: True, row_factory: dict_row, prepare_threshold: 0}, check=ConnectionPool.check_connection, max_lifetime=1800, open=True)`.
+  - `get_checkpointer()` (`@st.cache_resource`): `PostgresSaver(pool)` plus `setup()`.
+  - Comments tie each setting to the problem it solves; `prepare_threshold=0` is there because the URL is Neon's PgBouncer pooled endpoint.
+- `app.py` (rewritten):
+  - History is no longer kept in `st.session_state`.
+  - `get_graph()` (`@st.cache_resource`) builds the graph from `get_llm()` and `get_checkpointer()`.
+  - `current_trip_id()` reads `?trip=`, accepts only a valid UUID, and otherwise makes a new `uuid4` and writes it to the URL. `config = {"configurable": {"thread_id": trip_id}}`.
+  - A new trip runs `graph.invoke({"messages": []})` to reach the first interrupt. History is drawn from `graph.get_state(config).values["messages"]`.
+  - If `snapshot.interrupts` is set: show the chat input; on submit, `run_turn(Command(resume=prompt))`.
+  - If `snapshot.next` is set with no interrupt (a failed run): show the error and a Retry button, which runs `run_turn(None)` and then reruns.
+  - `stream_reply()` passes on only `AIMessageChunk` string tokens from `STREAMING_NODES`.
+  - On failure, `run_turn()` logs with `logger.exception`, stores a friendly message in `st.session_state.last_error`, and reruns.
+  - If the database can't be reached on load: friendly `st.error` and `st.stop()`; the raw exception is logged, not shown.
+  - Sidebar: "New trip" writes a new UUID to the URL and reruns; a caption says to bookmark the page.
+- `tests/fakes.py` (new): `FlakyModel` (fails its first `fail_times` calls in both `_call` and `_stream`, then answers) and `RecordingModel` (moved from `test_app.py`, now also records `_call`).
+- `tests/test_orchestrator.py` (new): 6 parametrized `route` cases.
+- `tests/test_graph.py` (new), 9 tests using `build_graph` + `InMemorySaver`:
+  - new trip greets and waits;
+  - resuming adds the stripped user message, the reply and `user_turns=1`;
+  - an empty resume raises;
+  - message streaming comes only from `chat` (and `wait_for_user`, which the UI filters out);
+  - a failed node leaves `next=("chat",)` with no interrupt and the user message kept, and `invoke(None)` recovers;
+  - state survives a new graph instance on the same saver;
+  - threads are isolated;
+  - the model gets the system message plus 20 messages;
+  - `ROUTE_MAP` only points at existing nodes.
+- `tests/test_app.py` (rewritten), 8 AppTests:
+  - An autouse fixture clears `st.cache_resource` and swaps `get_checkpointer` for an `InMemorySaver`.
+  - Tests: new trip gets a UUID in the URL and the greeting; chat round trip; reopening the link in a new session restores history; an invalid trip id is replaced; a model error shows Retry, hides the chat input and recovers on click; New trip switches the id and resets the chat; database down shows the friendly message without internals; LLM client settings.
+- `tests/test_integration.py` (new): skipped unless `RUN_INTEGRATION=1`. Uses the real `get_checkpointer()` and `get_llm()`: starts a trip, sends one message, reads it back through a fresh graph, then `delete_thread()` in a `finally` block and checks the trip is gone.
+- `Docs/Phase2-Guide.md` (new): learning walkthrough with a sequence diagram of one message, a "why" section per file, a table of pool settings, the testing strategy, commands, and what is left for later.
+- `Docs/architecture.png`: added by the user (not by Claude); now part of this change set.
+- No dependency changes. `requirements.txt` already had everything Phase 2 needs.
+
+**Decisions**
+- **`ROUTE_MAP` instead of a cut-down `route()`:** `route()` matches LLD.md now, and later phases change one map entry per agent. A test stops the map from pointing at a missing node.
+- **Model injected via `make_chat(llm)`:** the graph package never reads secrets, which keeps LLD.md's rule that only `llm.py`, `db.py` and `cache.py` touch them.
+- **`get_graph()` lives in `app.py`, not `build.py`:** caching is a Streamlit concern, and `build.py` stays free of Streamlit, so tests can import it directly.
+- **Retry is driven by checkpoint state, not session state:** `snapshot.next` without `snapshot.interrupts` means a failed run. Retry therefore works after a refresh or from another device, not just in the tab that saw the error.
+- **Friendly errors, full logs:** Phase 1 showed raw exception text to the user; Phase 2 logs it and shows a short message.
+- **No `ui/` package yet:** LLD.md's `ui/chat.py` split was postponed while `app.py` is about 150 lines; the guide says when to split.
+- **Tests kept offline by default:** the integration test is opt-in so `uv run pytest` needs no secrets, network or tokens.
+- **Phase numbering:** comments say "later phase", not "Phase 3", because the docs don't define Phase 3 (an earlier draft said "Phase 3" and was corrected).
+
+**Verification**
+- Before writing code, checked the installed APIs: `StateSnapshot` fields include `interrupts`; `PostgresSaver(conn, pipe=None, serde=None)`; `ConnectionPool` accepts `check`, `max_lifetime`, `open`; `add_conditional_edges(source, path, path_map)`.
+- Checked the shape of `DATABASE_URL` without printing it: scheme `postgresql`, Neon host with `-pooler`, query keys `channel_binding` and `sslmode`, database name set.
+- First `uv run pytest -q` → 3 failed, 20 passed. Cause: in AppTest, `at.query_params["trip"]` is a plain `str` (checked: `<class 'dict'>`, value `'d52426f6-…'`), so the tests' `[0]` took one character. Fixed the tests; the app was fine.
+- `uv run pytest -q` → **23 passed, 1 skipped in 5.3 s**.
+- `RUN_INTEGRATION=1 uv run pytest tests/test_integration.py -v` → **1 passed in 29.4 s** against real Neon and the HF model. This was also the first `setup()` run, which created LangGraph's checkpoint tables on the Neon database in `DATABASE_URL`.
+- Whole app against real services (`AppTest` on `app.py` with nothing patched):
+  - first load 16.3 s (imports, pool open, `setup()`, Neon waking), greeting shown, no exception;
+  - one turn ("Birdsong, and I hate crowds") 6.8 s, no errors, reply "Got it! Do you prefer a peaceful hike in nature or a relaxing stay at a quiet lodge?";
+  - reopening the same trip id in a new session showed 3 messages;
+  - the trip was then deleted with `delete_thread()`.
+- Not checked: clicking through in a real browser.
+- A first attempt to write this worklog entry failed on shell quoting before changing anything (checked with `git diff --stat`); it was redone from a script file.
+
+**Issues found**
+- First-load latency: 16 s on a cold start. Most of it is one-off per process (imports, pool, `setup()`), plus Neon's wake-up. Later page loads in the same process reuse the cached pool and graph. Status: note; recheck on Streamlit Cloud.
+- It wasn't checked which Neon branch (`dev` or `main`) the local `DATABASE_URL` uses. HLD.md says to use `dev` locally. Status: open, for the user to confirm in the Neon console.
+- Token counts are returned but not yet stored in `usage`. Status: deferred to the phase that adds `cache.py` and the tables from LLD.md.
+- Open issue 3 fixed (PNG added); open issue 4 mostly resolved (see the table).
+
+**Next steps**
+1. Read `Docs/Phase2-Guide.md` and try the app: `uv run streamlit run app.py`, send a message, copy the URL into a new tab, and check the chat comes back.
+2. Confirm the local `DATABASE_URL` points at the Neon `dev` branch.
+3. ~~Commit Phase 2 on `dev` and push~~ Done. The commit includes this worklog, so its own hash isn't here; see `git log`. The earlier uncommitted worklog edits (the push entry) went into the same commit.
+4. Fix open issue 2 (lowercase doc links).
+5. Next phase: `planner/models.py` (`Preferences`, `TripInputs`), then the `profiler` and `constraints` nodes, switching their `ROUTE_MAP` entries and adding `after_constraints`.
