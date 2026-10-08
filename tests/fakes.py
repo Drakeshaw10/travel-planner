@@ -37,3 +37,33 @@ class RecordingModel(FakeListChatModel):
     def _stream(self, messages, *args, **kwargs):
         self.calls.append(messages)
         return super()._stream(messages, *args, **kwargs)
+
+
+class StructuredFake:
+    """Stands in for a chat model in nodes that call `with_structured_output`.
+
+    `results` is what each call returns, in order. Each one is either a model
+    instance (a successful parse) or an error string (a failed parse). Calls
+    return the same {"raw", "parsed", "parsing_error"} dict that LangChain
+    returns with include_raw=True. Every call's messages are kept in `calls`,
+    and the options passed to with_structured_output in `options`.
+    """
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+        self.options = {}
+
+    def with_structured_output(self, schema, **options):
+        from langchain_core.runnables import RunnableLambda
+
+        self.options = {"schema": schema, **options}
+
+        def respond(messages):
+            self.calls.append(messages)
+            result = self.results.pop(0)
+            if isinstance(result, str):
+                return {"raw": None, "parsed": None, "parsing_error": ValueError(result)}
+            return {"raw": None, "parsed": result, "parsing_error": None}
+
+        return RunnableLambda(respond)

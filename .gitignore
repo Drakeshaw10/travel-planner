@@ -2,3 +2,6 @@
 __pycache__/
 .pytest_cache/
 .streamlit/secrets.toml
+# Local model weights: multi-GB binaries, never commit
+*.gguf
+models/

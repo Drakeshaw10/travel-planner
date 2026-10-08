@@ -132,13 +132,14 @@ def test_database_down_shows_friendly_error(monkeypatch):
 
 
 def test_llm_client_settings(monkeypatch):
-    secrets = {"LLM_BASE_URL": "https://router.example/v1", "HF_TOKEN": "test-token", "LLM_MODEL": "test-model"}
+    secrets = {"LLM_BASE_URL": "https://router.example/v1", "LLM_API_KEY": "test-token", "LLM_MODEL": "test-model"}
     monkeypatch.setattr(planner.llm.st, "secrets", secrets)
 
     llm = planner.llm.get_llm()
 
     assert llm.model_name == "test-model"
     assert llm.openai_api_base == "https://router.example/v1"
+    assert llm.openai_api_key.get_secret_value() == "test-token"  # read from LLM_API_KEY
     assert llm.request_timeout == 60
     assert llm.max_retries == 2
     assert llm.streaming and llm.stream_usage

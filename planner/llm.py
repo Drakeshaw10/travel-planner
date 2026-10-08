@@ -1,4 +1,9 @@
-"""LLM client for GPT-OSS-120B through the Hugging Face router."""
+"""LLM client for any OpenAI-compatible chat API (currently Google Gemini).
+
+The provider is chosen entirely by secrets: LLM_BASE_URL, LLM_MODEL and
+LLM_API_KEY. Switching provider (Hugging Face router, Gemini, a local
+llama.cpp server) needs no code change, only different secret values.
+"""
 
 import streamlit as st
 from langchain_openai import ChatOpenAI
@@ -12,7 +17,7 @@ def get_llm() -> ChatOpenAI:
     """Create the chat model once per server process and reuse it on every rerun."""
     return ChatOpenAI(
         base_url=st.secrets["LLM_BASE_URL"],
-        api_key=st.secrets["HF_TOKEN"],
+        api_key=st.secrets["LLM_API_KEY"],
         model=st.secrets["LLM_MODEL"],
         temperature=0.7,
         streaming=True,

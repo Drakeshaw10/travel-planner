@@ -43,7 +43,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | 0 | Project skeleton: uv project, Streamlit hello page | Done, committed `cd39644` |
 | 1 | `planner/llm.py` on the HF router with the LLD limits; `app.py` streaming chat sending the last 20 messages; error message and retype on failure; secrets `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | Done and committed 2026-10-07 |
 | 2 | LangGraph engine (`graph/state.py`, `graph/build.py`, `nodes/chat.py`, `nodes/orchestrator.py`), `planner/db.py` checkpointer on Neon, trip id in URL, Retry button, AppTest | Done, committed and pushed on `dev` 2026-10-07. Walkthrough: [Phase2-Guide.md](Phase2-Guide.md) |
-| 3 | Not defined in the docs | — |
+| 3 | Profiler and constraints agents, `planner/models.py` (`Preferences`, `TripInputs`); named Phase 3 by the user. **Written by the user**, guided by Claude | In progress (planned 2026-10-07) |
 | 4 | Scoring weights tuned by hand (`scoring.py`) | Not started |
 | 5 | Not defined in the docs | — |
 | 6 | Live tools: SerpApi flights and hotels, OpenTripMap and Geoapify places | Not started |
@@ -57,6 +57,9 @@ The design docs name phases but don't list them all. This table is what can be r
 | 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Fixed 2026-10-07: the user added `Docs/architecture.png` (name matches both links) |
 | 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Mostly resolved by Phase 2 (all files marked "(Phase 2)" now exist). Remaining gaps: the layout roots at `travel-planner/` and lists a `ui/` package that doesn't exist yet (rendering is still in `app.py`); there is no `ui/debug.py` sidebar inspector |
 | 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Fixed 2026-10-07; writing the token counts to `usage` waits for the Phase 2 database |
+| 9 | Gemini API key printed into the chat by a careless `grep` (2026-10-08) | Open, the user rotates the key in Google AI Studio |
+| 8 | Norton 360 quarantined `llama-server.exe` and `scripts/start_llm.ps1` (2026-10-08). The local dev model can't run until the user restores and excludes the exe; the launcher is to be rewritten as `start_llm.cmd` without reading secrets | No longer applies: the local model was dropped and its files deleted 2026-10-08 |
+| 7 | Hugging Face Inference Providers credits are used up: every model call returns `402 You have no remaining credits` (first seen 2026-10-08). Blocks the live app, the integration test and live checks | Resolved 2026-10-08 by switching to Gemini (`gemini-3.5-flash`); HF lines removed from dev secrets |
 | 6 | `uv` cannot reach PyPI without `--system-certs` (TLS `UnknownIssuer`), and `git push` fails with "unable to get local issuer certificate" unless run as `git -c http.sslBackend=schannel push`. Permanent git fix: `git config --global http.sslBackend schannel` | Open (environment) |
 
 ---
@@ -340,3 +343,355 @@ Replace Phase 1's in-memory chat with the LangGraph engine from LLD.md, with sta
 3. ~~Commit Phase 2 on `dev` and push~~ Done. The commit includes this worklog, so its own hash isn't here; see `git log`. The earlier uncommitted worklog edits (the push entry) went into the same commit.
 4. Fix open issue 2 (lowercase doc links).
 5. Next phase: `planner/models.py` (`Preferences`, `TripInputs`), then the `profiler` and `constraints` nodes, switching their `ROUTE_MAP` entries and adding `after_constraints`.
+
+---
+
+## 2026-10-07: Phase 3 planned; the user now writes the code
+
+**Goal**
+Plan the next phase, which adds the `profiler` and `constraints` agents, and switch to the working style the user asked for.
+
+**Working style from now on**
+The user writes all implementation code. Claude splits the work into steps, explains the concepts and reasons, reviews the user's code, runs tests, and keeps this worklog. Phases 0 to 2 were written by Claude; from Phase 3 on, each entry says who wrote what.
+
+**Phase 3 scope** (from LLD.md: "Graph nodes", "Routing rules", "Discovery scoring", "Config, errors, limits")
+"Phase 3" is the user's name for this phase; the docs don't number it.
+
+| Step | What the user writes | Done when |
+| --- | --- | --- |
+| 1 | `planner/models.py`: `Preferences` and `TripInputs`, the fixed tag vocabulary, and a merge rule for new answers | Models validate good input, reject bad input, and merging keeps old values |
+| 2 | A spike script: does `with_structured_output(Preferences)` work with GPT-OSS-120B on the HF router, and with which `method`? | A recorded answer in this worklog |
+| 3 | `planner/graph/nodes/profiler.py`: `make_profiler(llm)` | Preferences merged; `phase="constraints"` once complete or after 6 turns; a parse failure is retried once, then old values are kept |
+| 4 | `planner/graph/nodes/constraints.py`: `make_constraints(llm)` | Trip details merged; `phase="selection"` once `missing()` is empty; relative dates work (today's date goes in the prompt) |
+| 5 | `orchestrator.py`: `after_constraints`; `build.py`: new nodes, edges and `ROUTE_MAP` entries | Routing tests pass; the graph runs end to end with fakes |
+| 6 | `chat` node uses `phase` and `trip.missing()` to ask the right next question | Asks about preferences in discovery and the missing trip details in constraints |
+| 7 | Tests for steps 1 to 6, the integration test, and a manual browser check | `uv run pytest` passes; one real conversation reaches `phase="selection"` |
+
+`scorer` doesn't exist in this phase, so `after_constraints` returning `"scorer"` needs a temporary mapping, in the same way `ROUTE_MAP` handles agents not built yet.
+
+**Changes**
+- `Docs/Worklog.md`: this entry. No code changes.
+
+**Verification**
+None (planning only).
+
+**Next steps**
+The user starts Step 1, `planner/models.py`.
+
+---
+
+## 2026-10-07: Phase 3 Step 1, `planner/models.py` (written by Claude at the user's request)
+
+**Goal**
+Add the `Preferences` and `TripInputs` models that the profiler and constraints nodes will fill from chat.
+
+**Who wrote it**
+Claude guided first: the plan, then a beginner walkthrough with a toy `Pizza` model. The user had created an empty `planner/models.py`, said "how do I start I have no idea", and then "just write the code". So Claude wrote `planner/models.py` and `tests/test_models.py`, with the reasons explained in comments. Lesson for later steps: start the user from a partial file or an example, not a blank file plus several design questions.
+
+**Changes**
+- `planner/models.py` (new):
+  - The tag vocabulary is defined once per kind as a `Literal` type: `Setting` (beach, hills, forest, desert, backwaters, heritage, city), `Mood` (calm, adventurous, romantic, social, spiritual), `Interest` (food, trekking, wildlife, temples, history, nightlife, water sports, photography, wellness), `Avoid` (crowds, long drives, heat, cold, rain), `Pace`, `Mode`. Tuples `SETTINGS`, `MOODS`, `INTERESTS`, `AVOIDS`, `MODES` are derived from them with `typing.get_args()`.
+  - Base class `Extracted(BaseModel)`:
+    - `VOCAB: ClassVar[dict]` maps each tag-list field to its vocabulary.
+    - A `field_validator("*", mode="before")` cleans tag lists: lower-case, trim, de-duplicate, turn a single string into a list and `None` into `[]`, and **drop** unknown tags rather than reject them.
+    - `merged(new)` returns a copy where every value `new` actually provides (not `None`, not `[]`) replaces the old one; lists are replaced, not added to.
+  - `Preferences(Extracted)`: `settings`, `moods`, `interests`, `avoid`, `pace`; `is_complete()` as in LLD.md (`avoid` optional).
+  - `TripInputs(Extracted)`: fields and limits as in LLD.md, `missing()` as in LLD.md, plus a `travellers` property.
+- `tests/test_models.py` (new), 26 tests:
+  - completeness;
+  - unknown tags dropped; tags normalised and de-duplicated; a single string and `None` handled;
+  - an invalid `pace` rejected;
+  - `missing()` order;
+  - 7 limit violations;
+  - an unknown mode dropped;
+  - `travellers`;
+  - the JSON round trip keeps `date`;
+  - merge: keeps old values, replaces given values, replaces lists, ignores empty lists, keeps an explicit 0, leaves the original unchanged.
+
+**Decisions** (and where they differ from LLD.md)
+- **Unknown tags are dropped, not rejected:** with a strict `Literal`, one invented tag would fail the whole LLM answer and lose its good values. The JSON schema still lists the allowed values as `enum`, so the model is guided toward them.
+- **`children` is `int | None = None`, not `int = 0` as in LLD.md:** this keeps "not said" separate from "no children". Otherwise `merged()` couldn't keep an explicit 0. `travellers` treats `None` as 0. `missing()` still doesn't include `children`. **This differs from LLD.md.**
+- **Lists are replaced on merge, not combined:** this lets a user take something back. In exchange, the profiler and constraints prompts must show the LLM the current values and ask for full updated lists (to remember in Steps 3 and 4).
+- **No past-date validator on the model:** "today" makes it hard to test, so the constraints node will check it.
+- **Tag spelling follows LLD.md's examples, including "long drives" with a space.** `destinations.csv` must use exactly these words.
+- `Candidate` and `PricedItem` from LLD.md are not added yet; they belong to the scorer and tools phases.
+
+**Verification**
+- `uv run pytest -q` → **49 passed, 1 skipped in 6.43 s** (26 new, 23 existing).
+- `Preferences.model_json_schema()`: `settings.items.enum` lists the 7 settings; `pace` is `anyOf[enum, null]`. `VOCAB` is not in the schema. `TripInputs` schema fields: origin_city, start_date, nights, adults, children, budget_inr, modes.
+- A first draft used a private `_vocab` attribute, which Pydantic wraps as a private attribute (it needed `.default` to read). It was changed to `VOCAB: ClassVar` before any test ran.
+
+**Issues found**
+- LLD.md's `children: int = 0` now differs from the code. Status: open; update LLD.md along with the other doc fixes (open issues 2 and 4).
+
+**Next steps**
+- Step 2: check that `get_llm().with_structured_output(Preferences)` works with GPT-OSS-120B on the HF router, and which `method` to use (`json_schema` or `function_calling`).
+- Ask the user whether they want to write Step 2 themselves (from a partial file) or have Claude write it.
+
+---
+
+## 2026-10-07: Phase 3 Step 2, structured output spike (written by Claude at the user's request)
+
+**Goal**
+Before building the profiler and constraints nodes, find out whether GPT-OSS-120B on the HF router can fill `Preferences` and `TripInputs` through LangChain's `with_structured_output`, and which `method` to use.
+
+**Who wrote it**
+Claude, after the user said "write step 2 as well".
+
+**Changes**
+- `scripts/spike_structured_output.py` (new). It reads `.streamlit/secrets.toml` directly with `tomllib`, because the script runs outside Streamlit, and uses `temperature=0`, `timeout=60`, `max_retries=1`. It runs 3 cases (2 `Preferences`, 1 `TripInputs`) with each method: `json_schema`, `function_calling`, `json_mode`. It uses `include_raw=True` so failures are reported instead of raised, checks each result against what the answer should contain, and prints the result, the timing and a summary. The system prompts follow the plan for the real nodes: the fixed vocabulary from `planner.models`, today's date for `TripInputs`, and "leave it null if not said".
+- Run with `uv run python -m scripts.spike_structured_output`. The first attempt, `uv run python scripts/spike_structured_output.py`, failed with `ModuleNotFoundError: No module named 'planner'`: running a file directly puts `scripts/` on `sys.path`, not the project root. The docstring now explains this.
+
+**Verification** (one live run, 2026-10-07, 9 model calls)
+
+| Method | Preferences: sea/relax/food/slow/no crowds | Preferences: adventurous/trek/wildlife/packed | TripInputs: Pune, 2+1, 2026-11-20, 4 nights, 60k, train/bus | Correct |
+| --- | --- | --- | --- | --- |
+| `json_schema` | correct, 0.9 s | correct, 0.5 s | correct, 0.4 s (all 7 fields) | 3/3 |
+| `function_calling` | correct, 0.5 s | correct, 0.6 s | correct, 0.5 s (all 7 fields) | 3/3 |
+| `json_mode` | correct, 0.7 s | correct, but added unrequested `settings: hills, forest`, 0.6 s | wrong: only `nights`, `adults`, `budget_inr`; lost origin, date, children, modes, 0.5 s | 2/3 |
+
+**Decisions**
+- **Use `method="json_schema"`** (LangChain's default for `ChatOpenAI`) in the profiler and constraints nodes. It was correct and fast in every case, and it sends the schema to the API, including the tag `enum`s.
+- **`function_calling` is the fallback** if the router or model ever stops accepting `json_schema`; it was equally good here.
+- **Don't use `json_mode`:** the schema only appears in the prompt, and it dropped fields and invented tags.
+- The script is kept in `scripts/` as a reusable check. It can be rerun after a model or router change.
+
+**Issues found**
+- Small sample: 3 cases, one run, temperature 0. The real nodes will run at the client's `temperature=0.7` unless they set their own, and messy multi-turn chats are harder than these one-liners. Status: note; the tests in Steps 3 and 4 and the integration run will show more.
+- LLD.md's error table already plans for parse failures ("retry once with the parse error added, then keep old values"). Steps 3 and 4 still need that, even though nothing failed here.
+
+**Next steps**
+Step 3: `planner/graph/nodes/profiler.py` with `make_profiler(llm)`. It uses `llm.with_structured_output(Preferences, method="json_schema", include_raw=True)`, a prompt showing the current preferences and the vocabulary, `merged()`, the 6-turn cap, and one retry on a parse error.
+
+---
+
+## 2026-10-08: Phase 3 Step 3, profiler node (written by Claude at the user's request)
+
+**Goal**
+Add the profiler node: during discovery, turn the chat into structured `Preferences`, merge them into state, and decide when discovery is over.
+
+**Who wrote it**
+Claude, after the user said "Write step 3 now".
+
+**Changes**
+- `planner/graph/nodes/profiler.py` (new):
+  - Constants `RECENT_MESSAGES = 10` and `MAX_DISCOVERY_TURNS = 6`, both from LLD.md.
+  - `SYSTEM_PROMPT` lists the fixed vocabulary, shows the known preferences as JSON, and asks for the *full* updated preferences: keep known tags unless the user changed their mind, add indirect hints ("waves" → beach), and leave unknowns empty.
+  - `build_prompt(current)`.
+  - `extract(extractor, messages)`: one call; on a parse error, logs a warning and retries once with a `HumanMessage` naming the error; on a second failure, logs and returns `None`. API errors are not caught, so the node fails and the Phase 2 Retry button handles it.
+  - `make_profiler(llm)` builds `llm.with_structured_output(Preferences, method="json_schema", include_raw=True)` once. The node validates the current preferences from state, sends the system prompt plus the last 10 messages, merges with `merged()` (or keeps the current values if extraction returned `None`), stores `model_dump(mode="json")`, and sets `phase="constraints"` when `is_complete()` is true or `user_turns >= 6`.
+  - The node is **not wired into the graph yet**; that is Step 5.
+- `tests/fakes.py`: added `StructuredFake`, a stand-in model whose `with_structured_output()` returns a `RunnableLambda` giving the same `{raw, parsed, parsing_error}` dict as LangChain's `include_raw=True`. Results are queued as model instances (parse succeeds) or strings (parse fails). It records `calls` and `options`.
+- `tests/test_profiler.py` (new), 10 tests:
+  - uses `json_schema` with `include_raw`;
+  - a partial answer is saved and discovery continues;
+  - merging with known preferences;
+  - complete preferences → `constraints`;
+  - the turn cap → `constraints`;
+  - a parse error is retried once with the error text;
+  - two parse errors keep the old preferences, with no third call;
+  - the prompt contains the vocabulary and the current preferences;
+  - only system plus 10 messages are sent;
+  - an API error propagates (`pytest.raises`).
+
+**Decisions**
+- **The profiler doesn't speak to the user.** It only updates state; the `chat` node asks the next question (LLD.md graph: `profiler → chat`). Its LLM call isn't streamed to the UI because `profiler` isn't in `STREAMING_NODES`.
+- **Current preferences go in the prompt**, as Step 1 required, because `merged()` replaces lists.
+- **The extractor is built once per node**, not on every call.
+- **Extraction temperature stays at the client's 0.7.** `with_structured_output` returns a chain, so it can't simply be given `temperature=0`. Step 2 showed `json_schema` works well; revisit if extraction proves unstable. Status: note.
+
+**Verification**
+- `uv run pytest -q` → **59 passed, 1 skipped in 16.4 s** (10 new). After changing the last test to `pytest.raises`: `tests/test_profiler.py` → 10 passed in 0.54 s.
+- Live check (the real profiler with the real model, two scripted turns, including a change of mind) **could not run**: `openai.APIStatusError: Error code: 402 - {'error': 'You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get monthly included credits.'}`. Not retried.
+
+**Issues found**
+- **HF credits used up** (open issue 7). This also affects the deployed app on `main`: every chat reply will fail. Users would see "Something went wrong" and a Retry button that can't succeed until credits are added. Status: open, needs the user.
+- Follow-up idea: a 402 (and 401) isn't something Retry can fix, so the UI could say "the planner is temporarily unavailable" instead of offering Retry. Status: open, not started.
+
+**Next steps**
+1. The user restores HF credits; then rerun the profiler live check and `RUN_INTEGRATION=1 uv run pytest tests/test_integration.py`.
+2. Commit Steps 1 to 3 on `dev`.
+3. Step 4: the constraints node.
+
+---
+
+## 2026-10-08: Local model option checked (DavidAU LFM2.5-2.6B GGUF)
+
+**Goal**
+The user asked whether `DavidAU/LFM2.5-2.6B-Qwen3.8-Turbo-Brilliance-Power-X12-NEO-MAX-GGUF` (file `LFM2.5-2.6B-Q3.8-TBrilliance-NEO-MAX-Q6_K.gguf`, downloaded with `huggingface-cli download ... --local-dir ./`) can replace the HF API (out of credits, open issue 7), and how that would differ.
+
+**Findings**
+- **The file is not on this machine.** There is no `.gguf` anywhere on `C:\`, which is the only drive (full recursive search, including hidden files). It's also not in `~/.cache/huggingface` or in the project. The download didn't complete or never ran.
+- No local model runner is installed: no `ollama`, `llama-server` or `lms`. `huggingface-cli` and `hf` exist in the global Python 3.11.
+- Hardware: Ryzen 7 5800H (8 cores / 16 threads), 15.9 GB RAM (2.5 GB free at the time), RTX 3050 Laptop with 4 GB VRAM, 33.2 GB free on C:.
+- Model, from the HF API and model card:
+  - base `LiquidAI/LFM2.5-2.6B`, GGUF architecture `lfm2`, licence Apache 2.0, context 131,072, Q6_K about 2 GB;
+  - DavidAU's "Turbo-Brilliance" add-on (12 reasoning and 12 instruct modes) is a community modification;
+  - the card says it is "a pure reasoning model that always thinks before it answers" and "is not recommended for agentic coding and knowledge-heavy tasks";
+  - recommended temperature 0.1 (Liquid AI), ChatML template.
+
+**Assessment given to the user**
+- Works for **local development only**, through llama.cpp `llama-server` (OpenAI-compatible). Only `secrets.toml` (`LLM_BASE_URL`, `LLM_MODEL`, a dummy `HF_TOKEN`) would change, because `planner/llm.py` already uses `ChatOpenAI` with `base_url`.
+- **Can't serve the deployed app:** Streamlit Community Cloud has no GPU and too little memory, and self-hosting would break the $0 hosting rule.
+- Differences from the API:
+  - much lower quality (2.6B vs 120B), most noticeable in the chat and writer prose;
+  - `<think>` text leaks into replies unless llama-server parses reasoning;
+  - with `json_schema` the output is forced to JSON from the first token, so the model can't reason first;
+  - it is an unofficial variant (the official LiquidAI GGUF is suggested instead);
+  - the Step 2 spike needs rerunning against it.
+- Also suggested: the same `gpt-oss-120b` from a provider with a free tier (Groq was named as an example). Only secrets would change, the Step 2 results still hold, and it works when deployed. Its free limits were **not checked**.
+
+**Changes**
+- `.gitignore`: added `*.gguf` and `models/` under a comment, so a multi-GB model downloaded into the project can't be committed. Checked with `git check-ignore -v test.gguf` → `.gitignore:6:*.gguf`.
+
+**Next steps**
+The user chooses between a local model (Claude guides the llama.cpp install and download, then reruns the spike) and a free-tier hosted API (pick a provider, update secrets). Steps 1 to 3 are still uncommitted.
+
+---
+
+## 2026-10-08: Decision: local model for dev, free-tier hosted model for production
+
+**Decision (by the user)**
+- **Development:** a local model served by llama.cpp's `llama-server` on this laptop.
+- **Production** (`main`, Streamlit Cloud): a free-tier hosted OpenAI-compatible API, set up when the app goes live. The provider is not chosen yet; `gpt-oss-120b` on Groq was suggested, but its limits are not checked.
+- No code change is needed to switch: `planner/llm.py` reads `LLM_BASE_URL`, `LLM_MODEL` and `HF_TOKEN` from secrets. The local `.streamlit/secrets.toml` points at llama-server, and Streamlit Cloud's secrets point at the hosted API.
+
+**Facts gathered for the setup** (2026-10-08)
+- GPU: RTX 3050 Laptop, 4096 MiB, driver **546.30, CUDA 12.3**.
+- llama.cpp latest release `b11491` (2026-10-08). Its Windows x64 builds: `cpu`, `cuda-12.4`, `cuda-13.4`, `vulkan`, `sycl`, `openvino`, `rocm`. **The CUDA builds need a driver for CUDA ≥ 12.4, and this one supports 12.3, so the Vulkan build (`llama-b11491-bin-win-vulkan-x64.zip`) was chosen.** Updating the NVIDIA driver would make the CUDA build possible later.
+- `winget search llama.cpp` found no package (the msstore source also needs its agreements accepted).
+- Model: Liquid AI's official `LiquidAI/LFM2.5-2.6B-GGUF` instead of DavidAU's variant. Files include `LFM2.5-2.6B-Q6_K.gguf`, `Q5_K_M`, `Q4_K_M`, `Q8_0`. Architecture `lfm2`, context 131,072. Licence `lfm1.0` (Liquid's LFM Open License, **not Apache 2.0** like the DavidAU repo states); to be read before any commercial use.
+- A possible reason the earlier `huggingface-cli download` left no file: this machine's TLS interception (open issue 6) also affects Python downloads. Not confirmed; the guide uses a browser download to avoid it.
+
+**Changes**
+None yet. A step-by-step setup guide was given to the user: binaries outside the repo, the model in the ignored `models/` folder, a `scripts/start_llm.ps1` launcher, dev secrets, a health check, and rerunning the Step 2 spike.
+
+**Next steps**
+The user follows the setup guide; then the Step 2 spike is rerun against the local model and the results are compared with GPT-OSS.
+
+---
+
+## 2026-10-08: Local model setup run by Claude; Norton quarantined the server and launcher
+
+**Goal**
+Do the local-model setup from the previous entry, at the user's request ("you run the download and setup commands").
+
+**Changes**
+- **llama.cpp** `b11491` Vulkan build, downloaded with `curl.exe`, which uses the Windows certificate store and so avoids open issue 6.
+  - Checked first: SHA-256 `ebcee6f1…5e3729` matches GitHub's published asset digest; uploader `github-actions[bot]`.
+  - Unzipped to `C:\Users\Aarush\tools\llama.cpp` (outside the repo). `--version` → `0.6.0-dev (build 11491, commit 9b4ed0ca5)`; `--list-devices` → `Vulkan0: NVIDIA GeForce RTX 3050 Laptop GPU (3977 MiB, 3380 MiB free)`.
+- **Model** `LiquidAI/LFM2.5-2.6B-GGUF` / `LFM2.5-2.6B-Q6_K.gguf`, downloaded with `curl.exe` to `models/` (gitignored). Size 2,221,615,104 bytes and SHA-256 `2E74B1A0…9C250D` both match the Hugging Face API's LFS metadata.
+- **`scripts/start_llm.ps1`** created, with params for the llama dir, the model path and the port. It checked that the exe and the model exist, and ran `llama-server` with `--alias lfm2.5-2.6b --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 --jinja`.
+  - First run failed: `couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080`. Port 8080 belongs to **TNSLSNR** (Oracle DB listener, pid 7200), so the port was changed to **8081** (checked free).
+  - llama-server warned `no API key is set and CORS allows all origins`, so `--api-key` was added. The script read the key from the `HF_TOKEN` line of `.streamlit/secrets.toml`.
+  - Second run: the model loaded in 8.6 s, `n_slots = 4, n_ctx_slot = 8192`, `listening on http://127.0.0.1:8081`. The process then stopped, because it was tied to Claude's background PowerShell session.
+- **`.streamlit/secrets.toml`** (gitignored; values never printed): the `HF_TOKEN`, `LLM_BASE_URL` and `LLM_MODEL` lines were commented out, not deleted. New values added: `HF_TOKEN = "local-<random 24-byte token>"` (also the server's API key), `LLM_BASE_URL = "http://127.0.0.1:8081/v1"`, `LLM_MODEL = "lfm2.5-2.6b"`. `git check-ignore` confirmed the file is still ignored.
+
+**What went wrong**
+- A third launch, `Start-Process ... -WindowStyle Hidden`, failed because `start_llm.ps1` no longer existed. Checks found **`llama-server.exe` gone** from the tools folder as well (the other 50 files remain). The model, secrets and spike script are intact.
+- Windows Defender had no detections (event IDs 1116–1119 in the last 2 hours). Installed antivirus: **Norton 360** and Windows Defender. The user then reported a **Norton quarantine notification**.
+- Likely causes (not yet confirmed from Norton's history):
+  - `llama-server.exe`: a reputation-based false positive on a newly built, unsigned binary. Its hash had been checked against GitHub's.
+  - `start_llm.ps1`: heuristics, because a PowerShell script started with `-ExecutionPolicy Bypass` that reads a secrets file and extracts a token looks like an info-stealer. **This was a design mistake in the launcher.**
+
+**Decisions**
+- Claude will not change Norton settings or restore quarantined items. The user checks Norton's quarantine list and decides; the suggestion is to restore `llama-server.exe` and exclude `C:\Users\Aarush\tools\llama.cpp`.
+- `start_llm.ps1` will not be restored. Planned replacement: `scripts/start_llm.cmd`, a batch file (no execution-policy bypass) that doesn't read `secrets.toml`. It will use `--api-key-file` with a gitignored `.llm-api-key` holding the same value as the dev `HF_TOKEN`.
+
+**Open issues**
+- Open issue 8 (new): Norton quarantined `llama-server.exe` and `start_llm.ps1`; the local model can't run until the user restores and excludes the exe.
+
+**Next steps**
+1. The user reports the file and threat names from Norton's quarantine, then restores and excludes `llama-server.exe` if it's a reputation detection.
+2. Claude writes `scripts/start_llm.cmd` and `.llm-api-key`, adds the key file to `.gitignore`, starts the server as a separate long-running process, and checks `/health`.
+3. Rerun the Step 2 spike against the local model.
+
+---
+
+## 2026-10-08: Local model dropped; switching to the Gemini API free tier
+
+**Decision (by the user)**
+The local llama.cpp route is abandoned after the Norton quarantine ("chuck it"). Instead, the user will provide a **Gemini API key (free tier)** for development; it can serve production too.
+
+**Facts checked** (2026-10-08, from the providers' docs)
+- **Gemini OpenAI compatibility** (ai.google.dev/gemini-api/docs/openai):
+  - base URL `https://generativelanguage.googleapis.com/v1beta/openai/`;
+  - structured output, streaming and function calling are all listed as supported;
+  - "Support for the OpenAI libraries is still in beta".
+  - So `planner/llm.py` (`ChatOpenAI` + `base_url`) should work unchanged. Only secrets change.
+- **Gemini models** listed on the pricing page: `gemini-3.8-flash` (newest), `3.7-flash`, `3.6-flash`, `3.5-flash`, `3.5-flash-lite`, `3.1-flash-lite`. A free tier exists for the Flash models.
+- **Gemini free-tier privacy:** "Used to improve our products": **Free tier: Yes**, paid tier: No. Fine for a portfolio demo whose trips hold no personal data (HLD.md, Security), but it should be said in the app or README if real users ever use it.
+- **Hugging Face credits** (huggingface.co/docs/inference-providers/pricing): one money balance per account, spent across all models and providers. Free users get **no** monthly credits; PRO gets $2.00/month; Team and Enterprise get $2.00 per seat. **Switching models does not give more quota.**
+
+**State left behind by the local-model attempt**
+- `.streamlit/secrets.toml` currently points at the local server (`127.0.0.1:8081`, `lfm2.5-2.6b`, a random local key); the HF lines are commented out. This must be replaced with Gemini values.
+- `models/LFM2.5-2.6B-Q6_K.gguf` (2.2 GB, gitignored) and `C:\Users\Aarush\tools\llama.cpp` (50 files; `llama-server.exe` quarantined by Norton) remain on disk. Deleting them waits for the user's OK.
+- Open issue 8 (Norton) no longer blocks anything. Open issue 7 (HF credits) is worked around by switching providers.
+
+**Next steps**
+1. The user adds the Gemini key to `.streamlit/secrets.toml` themselves (not pasted in chat).
+2. Claude checks it without printing it, reruns the Step 2 spike against Gemini, then runs the integration test and the Step 3 profiler live check.
+3. Optional cleanup of the local-model files.
+
+---
+
+## 2026-10-08: Gemini set up, `HF_TOKEN` renamed to `LLM_API_KEY`, local model deleted
+
+**Goal**
+At the user's request: start using the Gemini key the user added, rename the secret, delete the local-model files, and run the checks the HF credits error had blocked.
+
+**Changes**
+- `.streamlit/secrets.toml` (gitignored; values not recorded here):
+  - Removed the local-model block (old lines 9–14). It left a duplicate `HF_TOKEN`, so the file failed with `TOMLDecodeError: Cannot overwrite a value (at line 12)`.
+  - Renamed the user's `HF_TOKEN` line to `LLM_API_KEY`.
+  - `LLM_MODEL` changed from `gemini-3.8-flash` to **`gemini-3.5-flash`** (see the results below). `LLM_BASE_URL` = `https://generativelanguage.googleapis.com/v1beta/openai/`.
+  - The file parses; keys: DATABASE_URL, GEOAPIFY_KEY, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, OPENTRIPMAP_KEY, SERPAPI_KEY.
+- `planner/llm.py`: `api_key=st.secrets["LLM_API_KEY"]`; the module docstring now says any OpenAI-compatible provider, chosen only by secrets.
+- `tests/test_app.py`: the settings test uses `LLM_API_KEY` and also checks `llm.openai_api_key.get_secret_value() == "test-token"`.
+- `scripts/spike_structured_output.py`:
+  - reads `LLM_API_KEY`;
+  - new command-line options `--model` (override `LLM_MODEL`), `--methods` (subset of methods) and `--pause` (seconds before each call, for free-tier per-minute limits);
+  - `run(model_name, methods, pause)` prints the model in use. The argument is called `model_name` so it doesn't clash with the loop variable `model`.
+- `Docs/LLD.md`: the secrets table row now reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, with a note about the rename and Gemini.
+- **Deleted** (all created by the local-model attempt; checked first): `models/` (`LFM2.5-2.6B-Q6_K.gguf`, 2.07 GB), `C:\Users\Aarush\tools` (contained only `llama.cpp`, 51 files, 0.09 GB), `%TEMP%\llama-dl-b11491` (the zip), and `%TEMP%\llama-server-dev*.log`. All confirmed gone. `.gitignore` keeps `*.gguf` and `models/` in case a model is ever added again.
+
+**Incident: Gemini API key printed into the chat**
+To find references to `HF_TOKEN`, Claude ran `grep -rn "HF_TOKEN" ...`, which also matched `.streamlit/secrets.toml` and printed whole lines, including **the new Gemini key** and the now-useless local key. The Gemini key must be treated as exposed. **The user was asked to make a new key in Google AI Studio, delete the old one, and update `secrets.toml`.** Rule from now on: searches exclude `.streamlit/`, and that file is only read with its values masked.
+
+**Verification**
+- `uv run pytest -q` → **59 passed, 1 skipped in 6.38 s**.
+- First spike on `gemini-3.8-flash` (all 3 methods): json_schema 1/3 correct (the success took 13.6 s); the other calls returned `503 This model is currently experiencing high demand`, then `429 You exceeded your current quota`. The rate-limits doc publishes no numbers; it says "Rate limits are applied per project, not per API key", that RPD resets at midnight Pacific, and that actual limits are shown in AI Studio.
+- One-request probe per model (no retries), after the 429s had cleared, so the limit was per minute:
+
+| Model | Result | Time |
+| --- | --- | --- |
+| `gemini-3.8-flash` | OK | 49.1 s |
+| `gemini-3.5-flash` | OK | 1.9 s |
+| `gemini-3.5-flash-lite` | OK | 1.0 s |
+| `gemini-3.1-flash-lite` | OK | 7.0 s |
+
+- Spike with `--methods json_schema function_calling --pause 4`:
+
+| Model | json_schema | function_calling | Per call |
+| --- | --- | --- | --- |
+| `gemini-3.5-flash` | 3/3, exact | 3/3, exact | 2.0–3.7 s |
+| `gemini-3.5-flash-lite` | 3/3, but added unrequested mood `romantic` | 2/3 (dropped trekking and wildlife) | 1.0–1.4 s |
+
+- `RUN_INTEGRATION=1 uv run pytest tests/test_integration.py` → **1 passed in 21.3 s** (real Neon + `gemini-3.5-flash`).
+- **Profiler live check** (blocked since Step 3), `gemini-3.5-flash`, temperature 0.7:
+  - Turn 1, "Birdsong… misty mornings and long walks in the forest" (4.5 s) → settings `forest, hills`, moods `calm`, interests `trekking`, pace `None`; still in discovery.
+  - Turn 2, "Calm, slow days, good local food. Actually forget the forest, I'd rather be up in the hills" (3.5 s) → settings **`hills`** (forest removed), moods `calm`, interests `trekking, food`, pace `slow`, and `phase: constraints`. **The replace-on-merge change-of-mind design works with a real model.**
+
+**Decisions**
+- Dev model: **`gemini-3.5-flash` with `json_schema`**. It was the most accurate and fast enough. `gemini-3.8-flash` was too overloaded on the free tier.
+- Production will use the same provider. **When `dev` is merged into `main`, Streamlit Cloud's secrets must be updated in the same deploy:** rename `HF_TOKEN` to `LLM_API_KEY` and set the Gemini URL and model. Otherwise the deployed app fails with a missing secret.
+
+**Issues found**
+- Gemini key exposed in the chat (above). Status: open, needs the user to rotate it.
+- Free-tier rate limits: a fast burst of calls hits 429. The app makes 2 LLM calls per discovery turn (profiler + chat), so heavy use could hit the limit. A 429 currently shows "Something went wrong" + Retry, which works once the minute has passed. Status: note; consider a friendlier message for 429.
+- Open issue 7 (HF credits) is resolved by the provider switch. Open issue 8 (Norton) no longer applies, since the local model was deleted.
+
+**Next steps**
+1. The user rotates the Gemini key.
+2. Commit Phase 3 Steps 1 to 3 plus this switch on `dev`.
+3. Step 4: the constraints node.

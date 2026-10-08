@@ -400,7 +400,7 @@ All settings come from `st.secrets`; a failure in any node leaves the last check
 
 | Key | Used by | Added in |
 | --- | --- | --- |
-| `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | `llm.py` | Phase 1 |
+| `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` (any OpenAI-compatible provider; Gemini since 2026-10-08, renamed from `HF_TOKEN`) | `llm.py` | Phase 1 |
 | `DATABASE_URL` | `db.py`, `cache.py` | Phase 2 |
 | `SERPAPI_KEY` | `tools/flights.py`, `tools/hotels.py` | Phase 6 |
 | `OPENTRIPMAP_KEY`, `GEOAPIFY_KEY` | `tools/places.py` | Phase 6 |
