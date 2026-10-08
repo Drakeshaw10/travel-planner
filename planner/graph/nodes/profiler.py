@@ -7,14 +7,12 @@ follow-up question.
 """
 
 import json
-import logging
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 
+from planner.graph.nodes.extraction import extract
 from planner.models import AVOIDS, INTERESTS, MOODS, SETTINGS, Preferences
-
-logger = logging.getLogger(__name__)
 
 # How many recent messages the extractor reads (LLD.md: "last 10 messages").
 # Older answers are already captured in `preferences`, which goes in the prompt.
@@ -63,49 +61,18 @@ def build_prompt(current: Preferences) -> str:
     )
 
 
-def extract(extractor, messages) -> Preferences | None:
-    """Call the model once, and once more if its answer doesn't parse.
-
-    LLD.md's rule for structured output: retry once with the parse error added,
-    then give up and keep the old values. Returns None when both tries fail.
-
-    Only *parse* failures are handled here. If the API call itself fails
-    (timeout, 5xx), the exception propagates: the node fails, the checkpoint
-    stays as it was, and the user gets the Retry button from Phase 2.
-    """
-    result = extractor.invoke(messages)
-    if result["parsed"] is not None and result["parsing_error"] is None:
-        return result["parsed"]
-
-    logger.warning("Profiler output did not parse, retrying: %s", result["parsing_error"])
-    retry = [
-        *messages,
-        HumanMessage(
-            "Your previous answer could not be used because of this error:\n"
-            f"{result['parsing_error']}\n"
-            "Answer again, following the schema exactly."
-        ),
-    ]
-    result = extractor.invoke(retry)
-    if result["parsed"] is not None and result["parsing_error"] is None:
-        return result["parsed"]
-
-    logger.warning("Profiler output did not parse twice, keeping old preferences: %s",
-                   result["parsing_error"])
-    return None
-
-
 def make_profiler(llm: BaseChatModel):
     """Build the profiler node around a given model (see make_chat for why a factory)."""
     # json_schema: chosen by the Step 2 spike (scripts/spike_structured_output.py).
-    # include_raw=True: return parse errors instead of raising, so extract() can retry.
+    # include_raw=True: return parse errors instead of raising, so extract() can retry
+    # (see planner/graph/nodes/extraction.py).
     extractor = llm.with_structured_output(Preferences, method="json_schema", include_raw=True)
 
     def profiler(state) -> dict:
         current = Preferences.model_validate(state.get("preferences", {}))
         messages = [SystemMessage(build_prompt(current)), *state["messages"][-RECENT_MESSAGES:]]
 
-        found = extract(extractor, messages)
+        found = extract(extractor, messages, "profiler")
         updated = current.merged(found) if found else current
 
         update = {"preferences": updated.model_dump(mode="json")}

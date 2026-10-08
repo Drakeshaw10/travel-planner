@@ -32,6 +32,9 @@ class TravelState(TypedDict):
     # --- Filled in by later phases (see Docs/LLD.md, "State schema") ---------
     preferences: NotRequired[dict]     # Preferences
     trip: NotRequired[dict]            # TripInputs
+    # Not in LLD.md: why the constraints node rejected something the user said
+    # this turn (e.g. a past start date), so the chat node can explain it.
+    trip_problems: NotRequired[list[str]]
     candidates: NotRequired[list[dict]]  # Candidate, best first
     selected: NotRequired[str]         # dest_id
     transport: NotRequired[list[dict]]   # PricedItem, written by logistics

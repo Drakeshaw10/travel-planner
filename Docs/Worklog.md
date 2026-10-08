@@ -695,3 +695,64 @@ To find references to `HF_TOKEN`, Claude ran `grep -rn "HF_TOKEN" ...`, which al
 1. The user rotates the Gemini key.
 2. Commit Phase 3 Steps 1 to 3 plus this switch on `dev`.
 3. Step 4: the constraints node.
+
+---
+
+## 2026-10-08: Phase 3 Steps 1–3 committed; Step 4, constraints node (written by Claude at the user's request)
+
+**Commit**
+Before the push, a secret scan of the staged diff found 0 matches each for `AIza`, `AQ.Ab`, `hf_…`, `local-…` and `postgres://user:pass@`, and `secrets.toml` was not staged. Committed `0d68df0` "Phase 3 steps 1-3: models, structured output spike, profiler; switch to Gemini" on `dev` and pushed (`6e7c904..0d68df0`). `main` is unchanged at `bf58edf`.
+
+**Goal**
+The constraints node: during `phase == "constraints"`, extract `TripInputs` from chat, merge them, and move to `selection` when the trip is fully described.
+
+**Changes**
+- `planner/graph/nodes/extraction.py` (new): `extract(extractor, messages, label)`, moved out of `profiler.py` so both nodes share the "call, retry once with the parse error, then give up and return `None`" logic. `label` names the node in log messages. API errors still propagate.
+- `planner/graph/nodes/profiler.py`: its own `extract()`, `logging` and `HumanMessage` import removed; it now calls `extract(extractor, messages, "profiler")`. Its 10 tests passed unchanged after the move.
+- `planner/graph/nodes/constraints.py` (new):
+  - `RECENT_MESSAGES = 10`.
+  - `SYSTEM_PROMPT` includes today's date and weekday, and explains each field: a "3-day trip" is 2 nights; adults are 12+; `budget_inr` is the group total ("60k" = 60000, "1.5 lakh" = 150000, per-person × travellers); "anything is fine" means all modes. It shows the known trip as JSON and says "never guess".
+  - **Date rule:** "If no year is given, pick the year that puts the date closest to today, even if that date has already passed: report what the user said, don't correct it."
+  - `build_prompt(current, today)`.
+  - `drop_past_date(found, today) -> (TripInputs, problems)` drops a `start_date < today` and returns a problem message such as "The start date 01 October 2026 has already passed (today is 08 October 2026)."
+  - `make_constraints(llm, today=date.today)`: the clock is injected and called on every run (the process can stay up past midnight). The node uses `json_schema` + `include_raw`, merges, writes `trip` and **`trip_problems`** (rewritten every run), and sets `phase="selection"` only when `missing()` is empty **and there are no problems**.
+  - **Not wired into the graph yet** (Step 5).
+- `planner/graph/state.py`: new `trip_problems: NotRequired[list[str]]`, commented as **not in LLD.md**.
+- `tests/test_constraints.py` (new), 16 tests with a fixed `TODAY = 2026-10-08`:
+  - schema options;
+  - a partial answer is saved;
+  - merging;
+  - complete → `selection`; children not required;
+  - a past date is dropped, with the exact problem text;
+  - a past date doesn't erase a good known date and **doesn't move on**;
+  - today is a valid start date;
+  - no problems when everything is fine;
+  - problems clear on the next turn;
+  - parse retry; two parse errors keep the trip;
+  - the prompt has today and the known trip;
+  - today is read on every run;
+  - only recent messages are sent;
+  - an API failure propagates.
+
+**Verification**
+- `uv run pytest -q` → **75 passed, 1 skipped in 5.5 s**.
+- Live on `gemini-3.5-flash` (today 2026-10-08, Thursday), four turns:
+  - "leaving from Bengaluru next Friday, 3 nights" → Bengaluru, **2026-10-16**, 3 nights (5.2 s);
+  - "Two of us plus our 8 year old. Around 1.5 lakh total, train or flight" → adults 2, children 1, **150000**, modes train + flight, phase selection (3.8 s);
+  - "make it 5 nights, and we can only do 20k per person" → 5 nights, **60000** (20k × 3) (7.8 s);
+  - "start on 1st October instead?" → **2027-10-01** with the first prompt. ❌ Bug: the "next time that date comes round" rule moved the trip a year ahead without saying so.
+- After the date-rule fix: "1st October" (with a known trip) → dropped, old 2026-10-16 kept; "5th January" → **2027-01-05**; "20th November" → **2026-11-20**.
+- After adding `trip_problems`, one live call: `trip_problems: ['The start date 01 October 2026 has already passed (today is 08 October 2026).']`, but `phase: selection`. That led to the "no problems" condition, so the node now stays in `constraints` (covered by a test; not re-run live).
+
+**Decisions**
+- **Report the date the user said, then validate in code**, instead of letting the prompt "fix" past dates by moving them to next year.
+- **Rejections are recorded in state (`trip_problems`)** so Step 6's chat node can explain them, rather than ignoring the request silently.
+- **Open problems block the move to `selection`.**
+- "next Friday" said on a Thursday was read as 9 days ahead (2026-10-16). Some people mean tomorrow. Status: note; the chat node could confirm dates in Step 6.
+
+**Issues found**
+- `origin_city` is free text. It will need matching against the `origins` table when the scorer and feasibility nodes arrive.
+
+**Next steps**
+- Step 5: `after_constraints`, `ROUTE_MAP` entries for `profiler` and `constraints`, the graph edges, and graph tests.
+- Step 6: the chat node reads `phase`, `preferences`, `trip.missing()` and `trip_problems`.
