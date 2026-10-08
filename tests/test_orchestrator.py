@@ -2,7 +2,7 @@
 
 import pytest
 
-from planner.graph.nodes.orchestrator import route
+from planner.graph.nodes.orchestrator import after_constraints, route
 
 
 @pytest.mark.parametrize(
@@ -19,3 +19,16 @@ from planner.graph.nodes.orchestrator import route
 def test_route(phase, expected):
     state = {} if phase is None else {"phase": phase}
     assert route(state) == expected
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    [
+        ("selection", "scorer"),  # trip fully described: go and score destinations
+        ("constraints", "chat"),  # something missing or rejected: ask about it
+        (None, "chat"),
+    ],
+)
+def test_after_constraints(phase, expected):
+    state = {} if phase is None else {"phase": phase}
+    assert after_constraints(state) == expected

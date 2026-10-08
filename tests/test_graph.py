@@ -4,16 +4,19 @@ InMemorySaver behaves like PostgresSaver but keeps checkpoints in a dict, so
 these tests check pause/resume/retry logic without a database.
 """
 
+from datetime import date
+
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from planner.graph.build import ROUTE_MAP, build_graph
+from planner.graph.build import AFTER_CONSTRAINTS_MAP, ROUTE_MAP, build_graph
 from planner.graph.nodes.chat import GREETING
+from planner.graph.nodes.profiler import MAX_DISCOVERY_TURNS
 from planner.llm import MAX_HISTORY
-from tests.fakes import FlakyModel, RecordingModel
+from planner.models import Preferences, TripInputs
+from tests.fakes import FakeChat, FlakyModel, RecordingModel
 
 
 def config(thread_id="trip-1"):
@@ -25,7 +28,7 @@ def start(graph, thread_id="trip-1"):
 
 
 def test_new_trip_greets_and_waits():
-    graph = build_graph(FakeListChatModel(responses=["unused"]), InMemorySaver())
+    graph = build_graph(FakeChat(responses=["unused"]), InMemorySaver())
     start(graph)
 
     snap = graph.get_state(config())
@@ -36,7 +39,7 @@ def test_new_trip_greets_and_waits():
 
 
 def test_resume_adds_user_message_and_reply():
-    graph = build_graph(FakeListChatModel(responses=["Waves it is!"]), InMemorySaver())
+    graph = build_graph(FakeChat(responses=["Waves it is!"]), InMemorySaver())
     start(graph)
 
     graph.invoke(Command(resume="  Waves, definitely  "), config())
@@ -51,14 +54,14 @@ def test_resume_adds_user_message_and_reply():
 
 
 def test_empty_resume_is_rejected():
-    graph = build_graph(FakeListChatModel(responses=["unused"]), InMemorySaver())
+    graph = build_graph(FakeChat(responses=["unused"]), InMemorySaver())
     start(graph)
     with pytest.raises(ValueError):
         graph.invoke(Command(resume="   "), config())
 
 
 def test_stream_messages_only_from_chat_node():
-    graph = build_graph(FakeListChatModel(responses=["Hello"]), InMemorySaver())
+    graph = build_graph(FakeChat(responses=["Hello"]), InMemorySaver())
     start(graph)
 
     nodes, text = set(), ""
@@ -93,11 +96,11 @@ def test_failed_node_can_be_retried_from_checkpoint():
 def test_state_survives_a_new_graph_instance():
     """Simulates an app restart: a fresh graph on the same saver sees the trip."""
     saver = InMemorySaver()
-    first = build_graph(FakeListChatModel(responses=["One"]), saver)
+    first = build_graph(FakeChat(responses=["One"]), saver)
     start(first)
     first.invoke(Command(resume="hello"), config())
 
-    second = build_graph(FakeListChatModel(responses=["Two"]), saver)
+    second = build_graph(FakeChat(responses=["Two"]), saver)
     second.invoke(Command(resume="again"), config())
 
     contents = [m.content for m in second.get_state(config()).values["messages"]]
@@ -105,7 +108,7 @@ def test_state_survives_a_new_graph_instance():
 
 
 def test_trips_are_isolated_by_thread_id():
-    graph = build_graph(FakeListChatModel(responses=["A", "B"]), InMemorySaver())
+    graph = build_graph(FakeChat(responses=["A", "B"]), InMemorySaver())
     start(graph, "trip-a")
     start(graph, "trip-b")
     graph.invoke(Command(resume="only in a"), config("trip-a"))
@@ -127,6 +130,92 @@ def test_chat_sends_only_recent_history():
     assert sent[-1].content == "answer 11"
 
 
-def test_route_map_only_points_at_existing_nodes():
-    graph = build_graph(FakeListChatModel(responses=["x"]), InMemorySaver())
+def test_route_maps_only_point_at_existing_nodes():
+    graph = build_graph(FakeChat(responses=["x"]), InMemorySaver())
     assert set(ROUTE_MAP.values()) <= set(graph.nodes)
+    assert set(AFTER_CONSTRAINTS_MAP.values()) <= set(graph.nodes)
+
+
+# --- Phase 3: profiler and constraints wired in ------------------------------
+
+PREFS = Preferences(settings=["hills"], moods=["calm"], interests=["food"], pace="slow")
+TRIP = TripInputs(origin_city="Pune", start_date=date(2026, 11, 20), nights=4,
+                  adults=2, budget_inr=60000, modes=["train"])
+
+
+def phase3_graph(extractions, replies=None):
+    """A graph whose fake model answers chat with "ok" and extractions in order."""
+    model = FakeChat(responses=replies or ["ok"], extractions=list(extractions))
+    return build_graph(model, InMemorySaver(), today=lambda: date(2026, 10, 8))
+
+
+def nodes_run(graph, text, thread="trip-1"):
+    """Send one user message and return the names of the nodes that ran, in order."""
+    updates = graph.stream(Command(resume=text), config(thread), stream_mode="updates")
+    return [name for update in updates for name in update if name != "__interrupt__"]
+
+
+def test_discovery_turn_runs_profiler_then_chat():
+    graph = phase3_graph([Preferences(settings=["hills"])])
+    start(graph)
+
+    assert nodes_run(graph, "misty hills please") == ["wait_for_user", "profiler", "chat"]
+    snap = graph.get_state(config())
+    assert snap.values["preferences"]["settings"] == ["hills"]
+    assert snap.values["phase"] == "discovery"
+
+
+def test_complete_preferences_hand_over_to_constraints_next_turn():
+    graph = phase3_graph([PREFS, TripInputs(origin_city="Pune")])
+    start(graph)
+
+    nodes_run(graph, "calm hills, food, slow")  # profiler completes preferences
+    assert graph.get_state(config()).values["phase"] == "constraints"
+
+    assert nodes_run(graph, "from Pune") == ["wait_for_user", "constraints", "chat"]
+    assert graph.get_state(config()).values["trip"]["origin_city"] == "Pune"
+
+
+def test_complete_trip_moves_to_selection():
+    graph = phase3_graph([PREFS, TRIP])
+    start(graph)
+    nodes_run(graph, "calm hills, food, slow")
+    nodes_run(graph, "everything at once")
+
+    values = graph.get_state(config()).values
+    assert values["phase"] == "selection"
+    assert values["trip_problems"] == []
+    # No scorer yet: AFTER_CONSTRAINTS_MAP sends "scorer" to chat, and the
+    # graph pauses for the user as usual.
+    assert graph.get_state(config()).interrupts
+
+
+def test_rejected_value_keeps_the_trip_in_constraints():
+    past = TRIP.model_copy(update={"start_date": date(2026, 10, 1)})
+    graph = phase3_graph([PREFS, past])
+    start(graph)
+    nodes_run(graph, "calm hills, food, slow")
+    nodes_run(graph, "start 1st October")
+
+    values = graph.get_state(config()).values
+    assert values["phase"] == "constraints"
+    assert values["trip"]["start_date"] is None
+    assert "already passed" in values["trip_problems"][0]
+
+
+def test_discovery_turn_cap_moves_on_with_incomplete_preferences():
+    graph = phase3_graph([])  # the profiler never learns anything
+    start(graph)
+    for i in range(MAX_DISCOVERY_TURNS):
+        nodes_run(graph, f"not sure {i}")
+
+    assert graph.get_state(config()).values["phase"] == "constraints"
+
+
+def test_selection_phase_messages_go_to_chat():
+    graph = phase3_graph([PREFS, TRIP])
+    start(graph)
+    nodes_run(graph, "calm hills, food, slow")
+    nodes_run(graph, "everything at once")
+
+    assert nodes_run(graph, "so where should we go?") == ["wait_for_user", "chat"]

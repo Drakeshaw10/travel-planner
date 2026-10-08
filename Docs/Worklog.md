@@ -57,6 +57,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Fixed 2026-10-07: the user added `Docs/architecture.png` (name matches both links) |
 | 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Mostly resolved by Phase 2 (all files marked "(Phase 2)" now exist). Remaining gaps: the layout roots at `travel-planner/` and lists a `ui/` package that doesn't exist yet (rendering is still in `app.py`); there is no `ui/debug.py` sidebar inspector |
 | 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Fixed 2026-10-07; writing the token counts to `usage` waits for the Phase 2 database |
+| 10 | Gemini free tier allows only 20 requests/day per project per model (`gemini-3.5-flash`); about 10 user turns/day at 2 calls per turn. Too little for a public demo (2026-10-08) | Open, decision needed |
 | 9 | Gemini API key printed into the chat by a careless `grep` (2026-10-08) | Open, the user rotates the key in Google AI Studio |
 | 8 | Norton 360 quarantined `llama-server.exe` and `scripts/start_llm.ps1` (2026-10-08). The local dev model can't run until the user restores and excludes the exe; the launcher is to be rewritten as `start_llm.cmd` without reading secrets | No longer applies: the local model was dropped and its files deleted 2026-10-08 |
 | 7 | Hugging Face Inference Providers credits are used up: every model call returns `402 You have no remaining credits` (first seen 2026-10-08). Blocks the live app, the integration test and live checks | Resolved 2026-10-08 by switching to Gemini (`gemini-3.5-flash`); HF lines removed from dev secrets |
@@ -756,3 +757,55 @@ The constraints node: during `phase == "constraints"`, extract `TripInputs` from
 **Next steps**
 - Step 5: `after_constraints`, `ROUTE_MAP` entries for `profiler` and `constraints`, the graph edges, and graph tests.
 - Step 6: the chat node reads `phase`, `preferences`, `trip.missing()` and `trip_problems`.
+
+---
+
+## 2026-10-08: Step 4 committed; Phase 3 Step 5, profiler and constraints wired into the graph (written by Claude)
+
+**Commit**
+`011de6c` "Phase 3 step 4: constraints node and shared extraction helper", on `dev`, pushed.
+- The pre-commit secret scan reported `AIza=1 AQ=1 pg=1`, and the command **did not stop the commit**.
+- Checked straight after (lines printed with masking): the only match is this worklog's own sentence describing the earlier scan, which names the patterns as text. **No secret was committed.**
+- Process fix: the scan now uses real key shapes (e.g. `AIza[0-9A-Za-z_-]{35}`) and must abort the commit on any match.
+
+**Changes**
+- `planner/graph/nodes/orchestrator.py`: `after_constraints(state)` returns `"scorer"` when `phase == "selection"`, otherwise `"chat"` (LLD.md).
+- `planner/graph/build.py`:
+  - `ROUTE_MAP` now points `profiler` and `constraints` at their real nodes.
+  - New `AFTER_CONSTRAINTS_MAP = {"scorer": "chat", "chat": "chat"}`; `scorer` is mapped to `chat` until that node exists.
+  - `build_graph(llm, checkpointer, *, today=date.today)` adds nodes `profiler` (`make_profiler(llm)`) and `constraints` (`make_constraints(llm, today=today)`), the edge `profiler → chat`, and the conditional edge `constraints → after_constraints`.
+  - Docstrings updated (Gemini; why `today` is keyword-only).
+- `tests/fakes.py`:
+  - New `FakeChat(FakeListChatModel)`, which answers chat from `responses` and `with_structured_output(Schema)` from an `extractions` queue (a model instance = a good parse, a string = a parse error, an empty queue = `Schema()`). It asserts the queued type matches the schema the node asked for.
+  - `FlakyModel` and `RecordingModel` now subclass it.
+  - `StructuredFake` no longer re-imports `RunnableLambda` locally.
+  - Needed because `build_graph` now calls `with_structured_output`, which plain fakes don't support.
+- `tests/test_graph.py`, `tests/test_app.py`: `FakeListChatModel` replaced with `FakeChat`.
+- `tests/test_orchestrator.py`: 3 `after_constraints` cases.
+- `tests/test_graph.py`, 6 new flow tests using `stream_mode="updates"` to list the nodes that ran:
+  - a discovery turn runs `wait_for_user → profiler → chat`;
+  - complete preferences hand over to `constraints` on the next turn (`wait_for_user → constraints → chat`);
+  - a complete trip → `selection`, the graph still pauses;
+  - a rejected value keeps the trip in `constraints` with a problem message;
+  - the 6-turn cap moves on with incomplete preferences;
+  - messages in `selection` go straight to `chat`.
+  - The map test now covers both maps.
+
+**Verification**
+- `uv run pytest -q` → **84 passed, 1 skipped in 9.7 s** (9 new). All 75 earlier tests passed unchanged after the wiring and fake changes.
+- **Live, whole app** (AppTest on `app.py`, real Gemini `gemini-3.5-flash` and Neon):
+  - Turn 1, "Birdsong for sure. Misty hills, calm and slow days, and great local food." (16.7 s): no error.
+  - Turn 2, "We're 2 adults from Pune, leaving 20th November for 4 nights, 60k total, train only." (10.7 s): the **constraints node succeeded**, but the chat node failed with **`429 RESOURCE_EXHAUSTED … Quota exceeded for metric generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash`, quotaId `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, retry in 16h30m**.
+  - The app showed "Something went wrong while I was replying." with Retry, and no exception.
+  - State read back from Neon: `phase: selection`; preferences `hills / calm / food / slow`; trip `Pune, 2026-11-20, 4 nights, 2 adults, 60000, train`; `trip_problems: []`; `next: ('chat',)`, not waiting for the user. So Retry would resume at `chat`, as designed.
+  - The trip was then deleted (`delete_thread`, checked).
+- Harmless warning seen: a Pydantic `PydanticSerializationUnexpectedValue` for `parsed` in LangChain's `include_raw` output during `stream_mode="messages"`. Status: note.
+
+**Issues found**
+- **Gemini free tier: 20 requests per day, per project, per model** for `gemini-3.5-flash`. The quota resets at midnight Pacific. With 2 LLM calls per user turn (profiler or constraints, plus chat), that is about **10 user messages a day for the whole app**. Fine for slow dev work, **not enough for a public demo**. Today's quota was used up by the spikes, the probes, the integration test and the live checks. Status: open, decision needed (see options given to the user).
+- A 429 with a daily-quota cause gets the same "Something went wrong" + Retry, but Retry can't succeed for hours. The UI should say the planner is out of quota until tomorrow. Status: open.
+
+**Next steps**
+1. The user picks a quota approach.
+2. Commit Step 5.
+3. Step 6: phase-aware chat node (it uses `phase`, `preferences`, `trip.missing()` and `trip_problems`).

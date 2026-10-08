@@ -8,13 +8,12 @@ import uuid
 
 import pytest
 import streamlit as st
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 from streamlit.testing.v1 import AppTest
 
 import planner.db
 import planner.llm
-from tests.fakes import FlakyModel
+from tests.fakes import FakeChat, FlakyModel
 
 APP = "../app.py"
 TIMEOUT = 30  # the first run imports LangChain, which can take longer than AppTest's 3 s default
@@ -46,7 +45,7 @@ def open_app(trip_id=None):
 
 
 def test_new_trip_gets_id_in_url_and_greeting(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["unused"]))
+    use_model(monkeypatch, FakeChat(responses=["unused"]))
     at = open_app()
 
     assert not at.exception
@@ -55,7 +54,7 @@ def test_new_trip_gets_id_in_url_and_greeting(monkeypatch):
 
 
 def test_chat_round_trip(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["Waves it is!"]))
+    use_model(monkeypatch, FakeChat(responses=["Waves it is!"]))
     at = open_app()
 
     at.chat_input[0].set_value("Waves, definitely").run()
@@ -65,7 +64,7 @@ def test_chat_round_trip(monkeypatch):
 
 
 def test_reopening_the_link_restores_the_conversation(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["Waves it is!"]))
+    use_model(monkeypatch, FakeChat(responses=["Waves it is!"]))
     first = open_app()
     trip_id = first.query_params["trip"]
     first.chat_input[0].set_value("Waves, definitely").run()
@@ -78,7 +77,7 @@ def test_reopening_the_link_restores_the_conversation(monkeypatch):
 
 
 def test_invalid_trip_id_starts_a_new_trip(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["unused"]))
+    use_model(monkeypatch, FakeChat(responses=["unused"]))
     at = open_app("not-a-uuid")
 
     assert not at.exception
@@ -106,7 +105,7 @@ def test_model_error_shows_retry_and_retry_recovers(monkeypatch):
 
 
 def test_new_trip_button_switches_trip(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["Waves it is!"]))
+    use_model(monkeypatch, FakeChat(responses=["Waves it is!"]))
     at = open_app()
     old_id = at.query_params["trip"]
     at.chat_input[0].set_value("Waves").run()
@@ -118,7 +117,7 @@ def test_new_trip_button_switches_trip(monkeypatch):
 
 
 def test_database_down_shows_friendly_error(monkeypatch):
-    use_model(monkeypatch, FakeListChatModel(responses=["unused"]))
+    use_model(monkeypatch, FakeChat(responses=["unused"]))
 
     def broken():
         raise ConnectionError("could not connect to server")

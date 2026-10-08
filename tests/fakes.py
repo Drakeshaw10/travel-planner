@@ -1,9 +1,41 @@
 """Fake chat models shared by the tests. None of them use the network."""
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.runnables import RunnableLambda
 
 
-class FlakyModel(FakeListChatModel):
+class FakeChat(FakeListChatModel):
+    """A fake model for the whole graph: chat replies *and* structured output.
+
+    - Chat calls (the `chat` node) answer from `responses`, like FakeListChatModel.
+    - `with_structured_output(Schema)` calls (profiler, constraints) answer from
+      the `extractions` queue, in order. Each item is a model instance (a good
+      parse) or a string (a parse error). When the queue is empty they return
+      an empty `Schema()`, i.e. "the user said nothing new", so tests that only
+      care about chat need no extractions at all.
+
+    Why the queue is shared: each user turn runs at most one extracting node,
+    so the order of `extractions` is simply the order of user turns.
+    """
+
+    extractions: list = []
+
+    def with_structured_output(self, schema, **options):
+        def respond(messages):
+            if not self.extractions:
+                return {"raw": None, "parsed": schema(), "parsing_error": None}
+            result = self.extractions.pop(0)
+            if isinstance(result, str):
+                return {"raw": None, "parsed": None, "parsing_error": ValueError(result)}
+            # Catch test mistakes early: a TripInputs queued for the profiler
+            # would otherwise fail somewhere far less obvious.
+            assert isinstance(result, schema), f"queued {type(result).__name__}, node asked for {schema.__name__}"
+            return {"raw": None, "parsed": result, "parsing_error": None}
+
+        return RunnableLambda(respond)
+
+
+class FlakyModel(FakeChat):
     """Fails its first `fail_times` calls, then answers from `responses`.
 
     Used to test that a failed node leaves a checkpoint the user can retry from.
@@ -25,7 +57,7 @@ class FlakyModel(FakeListChatModel):
         return super()._stream(*args, **kwargs)
 
 
-class RecordingModel(FakeListChatModel):
+class RecordingModel(FakeChat):
     """Keeps the messages it was sent on each call."""
 
     calls: list = []
@@ -55,8 +87,6 @@ class StructuredFake:
         self.options = {}
 
     def with_structured_output(self, schema, **options):
-        from langchain_core.runnables import RunnableLambda
-
         self.options = {"schema": schema, **options}
 
         def respond(messages):

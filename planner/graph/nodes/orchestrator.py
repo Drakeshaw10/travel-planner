@@ -20,3 +20,12 @@ def route(state) -> Literal["profiler", "constraints", "chat"]:
             # "selection", "planning" and "done": the user is chatting about
             # the shortlist or the finished plan.
             return "chat"
+
+
+def after_constraints(state) -> Literal["scorer", "chat"]:
+    """After `constraints`: score destinations once the trip is fully described.
+
+    The constraints node sets phase="selection" only when nothing is missing and
+    nothing the user said was rejected. Until then `chat` asks the next question.
+    """
+    return "scorer" if state.get("phase") == "selection" else "chat"
