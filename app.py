@@ -15,12 +15,16 @@ from langgraph.types import Command
 
 from planner.db import get_checkpointer
 from planner.graph.build import STREAMING_NODES, build_graph
+from planner.graph.nodes.chat import CHANGE_DETAILS, CHANGE_DETAILS_TEXT
 from planner.llm import get_llm
 
 # Errors are logged in full for the developer (Streamlit Cloud shows these in
 # "Manage app" -> logs) and shown to the user as a short, friendly message.
 # Raw exception text can leak internals such as hostnames or request ids.
 logger = logging.getLogger(__name__)
+
+# Phases in which the trip details are complete and can be changed again.
+EDITABLE_PHASES = {"selection", "planning", "done"}
 
 st.set_page_config(page_title="Moody Trip Planner", page_icon="🧭")
 
@@ -124,13 +128,28 @@ for msg in snapshot.values.get("messages", []):
 #   (a node raised). Typing now would have nothing to resume, so offer Retry.
 # - neither: nothing to do (cannot happen in Phase 2, the loop never ends).
 if snapshot.interrupts:
-    if prompt := st.chat_input("Type your answer..."):
+    # Once the trip details are complete, offer a way back to edit them.
+    # Without this, every later message goes to chat and the trip can't change.
+    if snapshot.values.get("phase") in EDITABLE_PHASES and st.button("✏️ Change trip details"):
+        st.session_state.pop("last_error", None)
+        with st.chat_message("user"):
+            st.markdown(CHANGE_DETAILS_TEXT)
+        # The click resumes the graph like a typed message, but with an action
+        # instead of text; wait_for_user switches back to the constraints phase.
+        run_turn(graph, Command(resume=CHANGE_DETAILS), config)
+        st.rerun()  # redraw from the saved state, so the button disappears
+    elif prompt := st.chat_input("Type your answer..."):
         st.session_state.pop("last_error", None)
         with st.chat_message("user"):
             st.markdown(prompt)
         # Command(resume=...) becomes the return value of interrupt() inside
         # wait_for_user, and the graph carries on from there.
         run_turn(graph, Command(resume=prompt), config)
+        # The controls above were chosen from the state loaded at the start of
+        # this run. The turn may have changed the phase (e.g. the trip is now
+        # complete, so "Change trip details" should appear), so redraw from
+        # the saved state.
+        st.rerun()
 elif snapshot.next:
     st.error(st.session_state.get("last_error", "My last reply didn't finish."))
     if st.button("Retry"):

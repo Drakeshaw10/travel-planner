@@ -14,6 +14,7 @@ from datetime import date
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
 
+from planner.graph.nodes.chat import is_edit_turn
 from planner.graph.nodes.extraction import extract
 from planner.models import TripInputs
 
@@ -114,12 +115,14 @@ def make_constraints(llm: BaseChatModel, today: Callable[[], date] = date.today)
         # trip_problems is rewritten on every run, so a problem from an
         # earlier turn never lingers once the user has fixed it.
         update = {"trip": updated.model_dump(mode="json"), "trip_problems": problems}
-        if not updated.missing() and not problems:
+        if not updated.missing() and not problems and not is_edit_turn(state):
             # Everything needed to price destinations is known and nothing the
             # user just said was rejected: move on to scoring and the shortlist
             # (`after_constraints` routes on this). With an open problem we
             # stay here, so the user can answer it before anything is priced
-            # with values they were trying to change.
+            # with values they were trying to change. On the turn the user
+            # clicked "Change trip details" the trip is complete too, but we
+            # stay so chat can ask what to change; the next message decides.
             update["phase"] = "selection"
         return update
 

@@ -45,7 +45,7 @@ def build_graph(
 ):
     """Compile the graph.
 
-    `today` is handed to the constraints node so tests can fix the date; the
+    `today` is handed to the constraints and chat nodes so tests can fix the date; the
     `*` makes it keyword-only, so a call can never pass it by position by mistake.
     """
     g = StateGraph(TravelState)
@@ -54,7 +54,7 @@ def build_graph(
     g.add_node("wait_for_user", wait_for_user)
     g.add_node("profiler", make_profiler(llm))
     g.add_node("constraints", make_constraints(llm, today=today))
-    g.add_node("chat", make_chat(llm))
+    g.add_node("chat", make_chat(llm, today=today))
 
     # START -> greet -> wait_for_user -(route)-> profiler | constraints | chat
     # profiler -> chat;  constraints -(after_constraints)-> chat (later: scorer)

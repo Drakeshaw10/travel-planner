@@ -143,3 +143,33 @@ def test_llm_client_settings(monkeypatch):
     assert llm.max_retries == 2
     assert llm.streaming and llm.stream_usage
     assert planner.llm.get_llm() is llm  # cached per process
+
+
+def _buttons(at, label):
+    return [b for b in at.button if b.label == label]
+
+
+def test_change_details_button_only_after_trip_is_complete(monkeypatch):
+    from datetime import date
+
+    from planner.models import Preferences, TripInputs
+
+    prefs = Preferences(settings=["hills"], moods=["calm"], interests=["food"], pace="slow")
+    trip = TripInputs(origin_city="Pune", start_date=date(2030, 11, 20), nights=4,
+                      adults=2, budget_inr=60000, modes=["train"])
+    use_model(monkeypatch, FakeChat(responses=["ok"], extractions=[prefs, trip, TripInputs()]))
+    at = open_app()
+    assert not _buttons(at, "✏️ Change trip details")  # discovery: nothing to edit yet
+
+    at.chat_input[0].set_value("calm hills, food, slow").run()
+    assert not _buttons(at, "✏️ Change trip details")  # constraints: still collecting
+    at.chat_input[0].set_value("Pune, 20 Nov 2030, 4 nights, 2 adults, 60k, train").run()
+    assert _buttons(at, "✏️ Change trip details")  # selection: details complete
+
+    _buttons(at, "✏️ Change trip details")[0].click().run()
+
+    assert not at.exception
+    texts = [m.markdown[0].value for m in at.chat_message]
+    assert "I'd like to change my trip details." in texts
+    assert not _buttons(at, "✏️ Change trip details")  # back in constraints
+    assert len(at.chat_input) == 1  # the user can type the change

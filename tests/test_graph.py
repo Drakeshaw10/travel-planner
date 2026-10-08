@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from planner.graph.build import AFTER_CONSTRAINTS_MAP, ROUTE_MAP, build_graph
-from planner.graph.nodes.chat import GREETING
+from planner.graph.nodes.chat import CHANGE_DETAILS, CHANGE_DETAILS_TEXT, GREETING
 from planner.graph.nodes.profiler import MAX_DISCOVERY_TURNS
 from planner.llm import MAX_HISTORY
 from planner.models import Preferences, TripInputs
@@ -219,3 +219,25 @@ def test_selection_phase_messages_go_to_chat():
     nodes_run(graph, "everything at once")
 
     assert nodes_run(graph, "so where should we go?") == ["wait_for_user", "chat"]
+
+
+def test_change_details_goes_back_to_constraints_then_returns():
+    graph = phase3_graph([PREFS, TRIP, TripInputs(), TripInputs(nights=6)])
+    start(graph)
+    nodes_run(graph, "calm hills, food, slow")
+    nodes_run(graph, "everything at once")
+    assert graph.get_state(config()).values["phase"] == "selection"
+
+    # The button: resume with the action instead of text.
+    ran = [n for u in graph.stream(Command(resume=CHANGE_DETAILS), config(), stream_mode="updates")
+           for n in u if n != "__interrupt__"]
+    values = graph.get_state(config()).values
+    assert ran == ["wait_for_user", "constraints", "chat"]
+    assert values["phase"] == "constraints"  # stays while the user decides
+    assert values["messages"][-2].content == CHANGE_DETAILS_TEXT
+
+    nodes_run(graph, "make it 6 nights")
+    values = graph.get_state(config()).values
+    assert values["phase"] == "selection"
+    assert values["trip"]["nights"] == 6
+    assert values["trip"]["origin_city"] == "Pune"  # everything else kept

@@ -35,6 +35,9 @@ class TravelState(TypedDict):
     # Not in LLD.md: why the constraints node rejected something the user said
     # this turn (e.g. a past start date), so the chat node can explain it.
     trip_problems: NotRequired[list[str]]
+    # Not in LLD.md: the user turn on which "Change trip details" was clicked.
+    # On that turn constraints doesn't move on and chat asks what to change.
+    trip_edit_turn: NotRequired[int]
     candidates: NotRequired[list[dict]]  # Candidate, best first
     selected: NotRequired[str]         # dest_id
     transport: NotRequired[list[dict]]   # PricedItem, written by logistics

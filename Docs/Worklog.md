@@ -809,3 +809,104 @@ The constraints node: during `phase == "constraints"`, extract `TripInputs` from
 1. The user picks a quota approach.
 2. Commit Step 5.
 3. Step 6: phase-aware chat node (it uses `phase`, `preferences`, `trip.missing()` and `trip_problems`).
+
+---
+
+## 2026-10-08: Step 5 committed; Phase 3 Step 6, phase-aware chat node (written by Claude)
+
+**Commit**
+`d3477f2` "Phase 3 step 5: wire profiler and constraints into the graph", on `dev`, pushed. The blocking secret scan (key-shaped patterns on added lines, plus a `secrets.toml` name check) found **0** matches.
+
+**Goal**
+Replace the chat node's fixed Phase 1 prompt with one built from state, so it asks the right next question in each phase and explains rejected values.
+
+**Changes**
+- `planner/graph/nodes/chat.py`:
+  - `SYSTEM_PROMPT` replaced by:
+    - `PERSONA`: short replies, one question, never suggest destinations, hotels or prices, plus today's date;
+    - `PREFERENCE_TOPICS`: what to ask for each missing preference, with example tags matching `planner/models.py`;
+    - `TRIP_TOPICS`: what to ask for each `TripInputs.missing()` field;
+    - `_known(model)`: non-empty fields as JSON.
+  - `build_prompt(state, today)`:
+    - **discovery**: shows the known preferences and asks about the first missing one, in the order settings → moods → interests → pace (or "anything else").
+    - **constraints**: shows the preferences and the known trip. On the first turn of the phase (no trip fields and no problems), recaps the preferences in one sentence. If `trip_problems` is set, states the problem and asks for a correction, **instead of** asking a new question. Otherwise asks for the first missing field.
+    - **selection / planning / done**: summarise, say destination matching is next, answer briefly, name no destinations.
+  - `make_chat(llm, today=date.today)`: the system message is `build_prompt(state, today())` every turn.
+  - New imports: `json`, `Callable`, `date`, `Preferences`, `TripInputs`.
+- `planner/graph/build.py`: `make_chat(llm, today=today)`; docstring updated.
+- `tests/test_chat.py` (new), 10 tests on the exact prompt text:
+  - the date and the no-invention rule;
+  - a new trip asks about the setting;
+  - discovery asks about the next missing preference;
+  - discovery with everything known still has a question;
+  - the first constraints turn recaps, then asks for the origin;
+  - later turns ask for the next missing field without a recap;
+  - a rejected value is explained and no other question is asked;
+  - a rejected value on the first turn skips the recap;
+  - selection summarises and names no destinations;
+  - the node sends exactly `build_prompt(...)` and returns the reply.
+
+**Verification**
+- A first edit, done with a Python script inside a bash heredoc, turned `\n` escapes into real line breaks: `SyntaxError: unterminated string literal (detected at line 72)` during test collection. The four strings were fixed with direct edits.
+- `uv run pytest -q` → **94 passed, 1 skipped in 8.8 s** (10 new).
+- Live: `gemini-3.5-flash`'s daily free quota (20) was already used up, so the check used **`gemini-3.5-flash-lite`**, which has a separate per-model quota. One call per case:
+  - discovery, only the setting known → "Misty hills and birdsong sounds wonderfully peaceful! Are you picturing a calm, quiet escape, or are you hoping for a bit of adventure…?" (moves on to mood ✅)
+  - first constraints turn → "It sounds like you're dreaming of a peaceful, slow-paced hill retreat… savouring the local flavours. Which city will you be starting your journey from?" (recap + origin ✅)
+  - rejected past date → "Ah, since today is already October 8th, 2026, the 1st of October has unfortunately already passed us by! Would you like to pick a new start date for our November trip?" (explains + asks ✅)
+  - The third reply was first hidden because `grep` treated output with a non-ASCII character as binary ("Binary file (standard input) matches"); rerun with `grep -a` and `ascii()`.
+
+**Issues found**
+- **Once the phase is `selection`, the user can't change trip details.** `route()` sends every later message to `chat`, which only summarises. LLD.md has no path back to `constraints` from `selection`. Status: open; design it with the shortlist phase (e.g. a "change details" button, or letting constraints run on edits).
+- In `selection` the chat says matching destinations is "the next step", but no scorer exists yet, so dev users hear that on every message. Status: expected until the scorer phase.
+
+**Next steps**
+- Step 7: an end-to-end check of Phase 3 with a real model, in the browser (`uv run streamlit run app.py`), once the quota allows. Update the integration test to cover a discovery → constraints → selection run.
+- Decide the Gemini quota approach (open issue 10).
+
+---
+
+## 2026-10-08: "Change trip details" option; dev model switched to gemini-3.5-flash-lite (written by Claude)
+
+**Goal**
+At the user's request: (1) fix the Step 6 gap where nothing can be changed once the trip reaches `selection`, by adding a "Change trip details" option; (2) use `gemini-3.5-flash-lite` for dev.
+
+**Changes**
+- `.streamlit/secrets.toml` (gitignored): `LLM_MODEL = "gemini-3.5-flash-lite"`. Only that line changed; the key set is unchanged.
+- `planner/graph/state.py`: new `trip_edit_turn: NotRequired[int]`, commented as **not in LLD.md**. It holds the user turn on which the button was clicked.
+- `planner/graph/nodes/chat.py`:
+  - Constants `CHANGE_DETAILS = {"action": "change_details"}` (the resume value) and `CHANGE_DETAILS_TEXT = "I'd like to change my trip details."`.
+  - `wait_for_user`: if the resume value equals `CHANGE_DETAILS`, it returns that text as a `HumanMessage`, increments `user_turns`, sets `phase="constraints"` and `trip_edit_turn=<this turn>`. Any other non-string resume value still raises `ValueError` (allowlist).
+  - `is_edit_turn(state)`: `trip_edit_turn == user_turns`.
+  - `build_prompt`, constraints phase: on the edit turn, list the current details in plain words, ask what to change, and say "if everything is fine they can just say so". The first-turn recap is skipped on an edit turn.
+- `planner/graph/nodes/constraints.py`: moves to `selection` only if nothing is missing, there are no problems **and it's not the edit turn**. The next message decides (a change, or "it's fine").
+- `app.py`:
+  - `EDITABLE_PHASES = {"selection", "planning", "done"}`.
+  - While paused for the user in those phases, it shows **"✏️ Change trip details"**. A click shows the user bubble, runs `run_turn(Command(resume=CHANGE_DETAILS))`, then `st.rerun()`.
+  - The chat input is in the `elif`, so it isn't drawn in the run that handles a click.
+  - **Bug fix:** `st.rerun()` after each typed turn. The controls were chosen from the state loaded at the start of the run, so the button didn't appear until the user's next action after their details became complete. Found by the new app test.
+- Tests (8 new):
+  - `test_chat.py`: the edit-turn prompt; the next turn is normal; `wait_for_user` turns the action into an edit request; unknown actions are rejected (`monkeypatch` on `interrupt`).
+  - `test_constraints.py`: the edit turn doesn't move on even when complete; the next turn moves on with the change.
+  - `test_graph.py`: `selection` → `CHANGE_DETAILS` runs `wait_for_user → constraints → chat`, stays in `constraints`; "make it 6 nights" → `selection` with nights 6 and other fields kept.
+  - `test_app.py`: no button in discovery or constraints; the button appears in `selection`; a click shows the request bubble, hides the button and leaves the chat input.
+
+**Decisions**
+- **The click goes through `wait_for_user` as a resume value**, not `graph.update_state()` from the UI. It is checkpointed and visible in history like any user turn, and the graph stays the only thing that changes trip state.
+- **"Which turn" (`trip_edit_turn`) instead of an on/off flag:** nothing needs resetting later, because the turn number simply stops matching.
+- **Trip details only.** Changing preferences (the profiler) is not included. It could follow the same pattern if wanted. Status: open idea.
+- **Later phases must refresh results** (shortlist, prices) when the trip changes after an edit. With no scorer yet, nothing is stale. Status: note for the scorer phase.
+
+**Verification**
+- `uv run pytest -q` → **102 passed, 1 skipped in 9.0 s** (8 new). The first run had 1 failure, the app test that exposed the missing-redraw bug above.
+- **Live, the whole app on `gemini-3.5-flash-lite` + Neon** (AppTest, 6 s pauses):
+  1. "Birdsong, misty hills, calm slow days and great local food." → preferences complete; "…Which city will you be starting your journey from?"; no button.
+  2. "2 adults from Pune, leaving 20th November for 4 nights, 60k total, train only." → summary with ₹60,000; **button shown**.
+  3. Click → "Here is what we currently have: traveling from Pune for 4 nights starting November 20th, with 2 adults, a ₹60,000 budget, and traveling by train. What would you like to change, or if everything is fine, just let me know?"; button hidden.
+  4. "Make it 6 nights please." → "…updated your trip to 6 nights…"; button shown again.
+  - Final state from Neon: `phase: selection`, trip `Pune, 2026-11-20, nights 6, adults 2, 60000, train`. No exceptions or errors. The trip was deleted afterwards.
+
+**Issues**
+- The Step 6 issue "once in `selection`, the user can't change trip details" is **fixed** for trip details.
+
+**Next steps**
+Commit on `dev`. Then Step 7: extend the integration test to discovery → constraints → selection, and a manual browser check.

@@ -174,3 +174,18 @@ def test_api_failure_propagates_for_the_retry_button():
 
     with pytest.raises(TimeoutError):
         make_constraints(Broken([]), today=fixed_today)(state())
+
+
+def test_edit_turn_does_not_move_on_even_when_complete():
+    _, constraints = node([TripInputs()])  # the click message holds no new facts
+    update = constraints({**state(trip=COMPLETE.model_dump(mode="json")),
+                          "user_turns": 5, "trip_edit_turn": 5})
+    assert "phase" not in update
+
+
+def test_turn_after_edit_moves_on_with_the_change():
+    _, constraints = node([TripInputs(nights=6)])
+    update = constraints({**state(trip=COMPLETE.model_dump(mode="json")),
+                          "user_turns": 6, "trip_edit_turn": 5})
+    assert update["phase"] == "selection"
+    assert update["trip"]["nights"] == 6
