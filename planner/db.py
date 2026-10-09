@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)  # no "Running get_...()" popup for users
 def get_pool() -> ConnectionPool:
     """One connection pool per server process, shared by every browser session.
 
@@ -49,7 +49,7 @@ def get_pool() -> ConnectionPool:
     )
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)  # no "Running get_...()" popup for users
 def get_checkpointer() -> PostgresSaver:
     """The LangGraph checkpointer, with its tables created if missing.
 

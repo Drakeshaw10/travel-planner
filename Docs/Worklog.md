@@ -997,3 +997,25 @@ Replace the generic "Something went wrong" + Retry with messages that say what h
 
 **Next steps**
 Commit this. The user does the Phase 3 browser check once the quota resets (12:30 PM IST). Decide who builds the destination data for the shortlist phase.
+
+---
+
+## 2026-10-09: Quota messages committed; removed the "Running get_graph()" popup (written by Claude)
+
+**Commit**
+`45c8aed` "Friendly messages for LLM quota and provider errors", on `dev`, pushed. Blocking secret scan: 0 matches.
+
+**Problem (reported by the user)**
+"after loading it graph_something pops up". Cause: `@st.cache_resource` defaults to `show_spinner=True`, so the first call of each cached function shows Streamlit's spinner text. Found in the installed Streamlit, `streamlit/runtime/caching/cache_utils.py:715`: ``spinner_message = f"Running `{name}()`."``. On a cold start users saw "Running `get_graph()`." (and the same for `get_pool()`, `get_checkpointer()`, `get_llm()`), exposing internal function names.
+
+**Changes**
+- `app.py` (`get_graph`), `planner/db.py` (`get_pool`, `get_checkpointer`), `planner/llm.py` (`get_llm`): `@st.cache_resource(show_spinner=False)` with a short comment saying why.
+- `tests/test_no_cache_spinner.py` (new): parses `app.py` and every `planner/**/*.py` with `ast` (nothing is run). It fails if any `st.cache_resource` or `st.cache_data` lacks `show_spinner=False`, and expects at least the 4 known functions.
+
+**Verification**
+- `uv run pytest -q` → **113 passed, 2 skipped in 7.4 s**.
+- Checked the test catches the bug: with the code fix stashed (`git stash`), `tests/test_no_cache_spinner.py` → **1 failed**; after `git stash pop`, it passes.
+- Not checked in a browser (the AppTest API doesn't expose spinners). The user will see it on their next load.
+
+**Trade-off**
+A cold start (about 16 s: imports, connection pool, Neon waking) now shows the page title with no "working" hint. If that feels unresponsive, the option is a friendly spinner, e.g. `show_spinner="Waking up the trip planner…"`, not a function name. Status: note.

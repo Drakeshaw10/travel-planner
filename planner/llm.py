@@ -12,7 +12,7 @@ from langchain_openai import ChatOpenAI
 MAX_HISTORY = 20
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)  # no "Running get_...()" popup for users
 def get_llm() -> ChatOpenAI:
     """Create the chat model once per server process and reuse it on every rerun."""
     return ChatOpenAI(

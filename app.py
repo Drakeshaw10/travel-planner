@@ -30,7 +30,7 @@ EDITABLE_PHASES = {"selection", "planning", "done"}
 st.set_page_config(page_title="Moody Trip Planner", page_icon="🧭")
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)  # no "Running get_...()" popup for users
 def get_graph():
     """Compile the graph once per server process; every session shares it.
 
