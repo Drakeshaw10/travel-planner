@@ -16,6 +16,7 @@ from langgraph.types import Command
 from planner.db import get_checkpointer
 from planner.graph.build import STREAMING_NODES, build_graph
 from planner.graph.nodes.chat import CHANGE_DETAILS, CHANGE_DETAILS_TEXT
+from planner.llm_errors import user_message
 from planner.llm import get_llm
 
 # Errors are logged in full for the developer (Streamlit Cloud shows these in
@@ -85,9 +86,11 @@ def run_turn(graph, payload, config):
     with st.chat_message("assistant"):
         try:
             st.write_stream(stream_reply(graph, payload, config))
-        except Exception:
+        except Exception as exc:
             logger.exception("Graph run failed for %s", config["configurable"]["thread_id"])
-            st.session_state.last_error = "Something went wrong while I was replying."
+            # Say what happened and when Retry can work (e.g. a daily quota
+            # that resets in hours), instead of a generic error every time.
+            st.session_state.last_error = user_message(exc)
             st.rerun()
 
 

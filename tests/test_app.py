@@ -173,3 +173,27 @@ def test_change_details_button_only_after_trip_is_complete(monkeypatch):
     assert "I'd like to change my trip details." in texts
     assert not _buttons(at, "✏️ Change trip details")  # back in constraints
     assert len(at.chat_input) == 1  # the user can type the change
+
+
+def test_daily_quota_error_shows_the_friendly_message(monkeypatch):
+    import httpx
+    import openai
+
+    class OutOfQuota(FakeChat):
+        def _call(self, *args, **kwargs):
+            response = httpx.Response(429, request=httpx.Request("POST", "https://example.test"))
+            raise openai.RateLimitError(
+                "Error code: 429 - quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier, "
+                "'retryDelay': '3600s'", response=response, body=None)
+
+        _stream = _call
+
+    use_model(monkeypatch, OutOfQuota(responses=["unused"]))
+    at = open_app()
+    at.chat_input[0].set_value("Hills please").run()
+
+    assert not at.exception
+    assert "used up today's free AI allowance" in at.error[0].value
+    assert "IST" in at.error[0].value
+    assert "googleapis" not in at.error[0].value and "quotaId" not in at.error[0].value
+    assert any(b.label == "Retry" for b in at.button)  # it will work after the reset

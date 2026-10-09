@@ -955,3 +955,45 @@ Commit on `dev`. Then Step 7: extend the integration test to discovery → const
 1. The user does the browser checklist; Phase 3 is marked done after that.
 2. Commit Step 7.
 3. Open decisions: the production LLM quota (open issue 10), rotating the exposed Gemini key (open issue 9), a friendlier message when the daily quota is used up.
+
+---
+
+## 2026-10-09: Step 7 committed; friendly LLM quota and error messages (written by Claude)
+
+**Context**
+The user hit the free-tier limit on `gemini-3.5-flash-lite`. The day before, testing had used about 20 calls on it (spike, chat checks, the live change-details run, 2 integration tests). The user set a rule: **during dev, all LLM calls go to `gemini-3.5-flash-lite` only.** Claude saved it as a memory, confirmed `LLM_MODEL = "gemini-3.5-flash-lite"` in dev secrets (only that value printed), and changed the spike docstring example that named `gemini-3.5-flash`. No API calls were made in this session.
+
+**Commit**
+`81ddea4` "Phase 3 step 7: end-to-end integration test and docs sync", on `dev`, pushed. Blocking secret scan: 0 matches.
+
+**Goal**
+Replace the generic "Something went wrong" + Retry with messages that say what happened and when Retry can work. A daily quota showed the same error as a blip, but Retry can't succeed for hours.
+
+**Changes**
+- `planner/llm_errors.py` (new):
+  - `user_message(exc, now=None) -> str` walks `__cause__`/`__context__` to find an `openai.APIStatusError`. (LangChain re-raises as `OpenAIRateLimitError(… ) from e`, a subclass of `openai.RateLimitError`; checked in the installed `langchain_openai`.)
+  - **429 with `PerDay` in the text** (Gemini's quotaId `GenerateRequestsPerDayPerProjectPerModel-FreeTier`) → `DAILY_QUOTA`: "The planner has used up today's free AI allowance. It should be back around HH:MM AM/PM IST (in about X h Y min). Your trip is saved: come back then and press Retry." The wait comes from `'retryDelay': 'NNNs'`, falling back to "Please retry in 16h30m50s", then to "It resets once a day.".
+  - Other 429 → `PER_MINUTE` (wait a minute, then Retry). 401/402/403 → `UNAVAILABLE` (key or credits; retrying won't help). Anything else → `GENERIC`, the old text.
+  - IST is a fixed `timezone(+5:30)`. That avoids needing a time-zone database, which Windows Python lacks without the `tzdata` package.
+- `app.py`: in `run_turn`, `st.session_state.last_error = user_message(exc)` replaces the fixed text. The full exception is still logged with `logger.exception`.
+- `tests/test_llm_errors.py` (new), 9 tests using real `openai` error objects (`httpx.Response`) and the exact Gemini error text from 2026-10-08 (no secrets):
+  - the daily quota gives the exact IST time and the wait (NOW = 07:00 UTC + 59450 s → "05:00 AM IST (in about 16 h 30 min)");
+  - the fallback to the "retry in" text;
+  - no delay at all → "resets once a day";
+  - LangChain's wrapped error;
+  - an error deeper in the chain;
+  - a per-minute limit;
+  - 402/401/403 → unavailable;
+  - timeouts and 503 stay generic;
+  - no `googleapis` or `quotaId` in the message.
+- `tests/test_app.py`: `test_daily_quota_error_shows_the_friendly_message`. A `FakeChat` subclass raises a daily-quota `openai.RateLimitError`; the app shows the allowance message with "IST", no provider internals, and keeps the Retry button.
+
+**Verification**
+`uv run pytest -q` → **112 passed, 2 skipped in 7.0 s** (10 new). Not checked live (on purpose: it would cost quota).
+
+**Notes**
+- The message lives in `st.session_state`, so after a page refresh the stopped run shows the older generic "My last reply didn't finish." with Retry. Acceptable for now.
+- Open issue 10 (the production quota) is unchanged: this only explains the limit, it doesn't raise it.
+
+**Next steps**
+Commit this. The user does the Phase 3 browser check once the quota resets (12:30 PM IST). Decide who builds the destination data for the shortlist phase.
