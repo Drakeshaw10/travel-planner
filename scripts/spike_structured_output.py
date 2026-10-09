@@ -19,7 +19,7 @@ out, and how long it took.
 Run from the project root (spends a few thousand tokens of HF credit):
 
     uv run python -m scripts.spike_structured_output
-    uv run python -m scripts.spike_structured_output --model gemini-3.5-flash --methods json_schema
+    uv run python -m scripts.spike_structured_output --methods json_schema --pause 6
 
 (`-m` puts the project root on the import path so `planner` can be imported;
 `python scripts/spike_structured_output.py` would only see the scripts/ folder.)

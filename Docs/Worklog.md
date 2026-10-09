@@ -43,7 +43,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | 0 | Project skeleton: uv project, Streamlit hello page | Done, committed `cd39644` |
 | 1 | `planner/llm.py` on the HF router with the LLD limits; `app.py` streaming chat sending the last 20 messages; error message and retype on failure; secrets `HF_TOKEN`, `LLM_BASE_URL`, `LLM_MODEL` | Done and committed 2026-10-07 |
 | 2 | LangGraph engine (`graph/state.py`, `graph/build.py`, `nodes/chat.py`, `nodes/orchestrator.py`), `planner/db.py` checkpointer on Neon, trip id in URL, Retry button, AppTest | Done, committed and pushed on `dev` 2026-10-07. Walkthrough: [Phase2-Guide.md](Phase2-Guide.md) |
-| 3 | Profiler and constraints agents, `planner/models.py` (`Preferences`, `TripInputs`); named Phase 3 by the user. **Written by the user**, guided by Claude | In progress (planned 2026-10-07) |
+| 3 | Profiler and constraints agents, `planner/models.py` (`Preferences`, `TripInputs`); named Phase 3 by the user. Written by Claude at the user's request (Step 1 onward) | Steps 1–7 done 2026-10-08; waiting on the user's browser check |
 | 4 | Scoring weights tuned by hand (`scoring.py`) | Not started |
 | 5 | Not defined in the docs | — |
 | 6 | Live tools: SerpApi flights and hotels, OpenTripMap and Geoapify places | Not started |
@@ -53,7 +53,7 @@ The design docs name phases but don't list them all. This table is what can be r
 | # | Issue | Status |
 | --- | --- | --- |
 | 1 | `pytest` is not a project dependency, so a bare `pytest` runs the global Python 3.11 install and the AppTest times out | Fixed 2026-10-07 |
-| 2 | Doc cross-links use lowercase names (`hld.md`, `lld.md`, `architecture.md`) but the files are `HLD.md`, `LLD.md`, `Architecture.md`; links break on GitHub | Open |
+| 2 | Doc cross-links use lowercase names (`hld.md`, `lld.md`, `architecture.md`) but the files are `HLD.md`, `LLD.md`, `Architecture.md`; links break on GitHub | Fixed 2026-10-08 (all links checked) |
 | 3 | `architecture.png` is linked from Architecture.md and HLD.md but does not exist | Fixed 2026-10-07: the user added `Docs/architecture.png` (name matches both links) |
 | 4 | LLD.md says Phases 0 to 2 match it and marks Phase 2 files as existing; only Phase 1 code exists | Mostly resolved by Phase 2 (all files marked "(Phase 2)" now exist). Remaining gaps: the layout roots at `travel-planner/` and lists a `ui/` package that doesn't exist yet (rendering is still in `app.py`); there is no `ui/debug.py` sidebar inspector |
 | 5 | `planner/llm.py` lacks `timeout=60`, `max_retries=2`, `stream_usage=True` from the LLD limits table | Fixed 2026-10-07; writing the token counts to `usage` waits for the Phase 2 database |
@@ -910,3 +910,48 @@ At the user's request: (1) fix the Step 6 gap where nothing can be changed once 
 
 **Next steps**
 Commit on `dev`. Then Step 7: extend the integration test to discovery → constraints → selection, and a manual browser check.
+
+---
+
+## 2026-10-08: Step 6 committed; Phase 3 Step 7, end-to-end checks and docs sync (written by Claude)
+
+**Commit**
+`f6aa3e2` "Phase 3 step 6: phase-aware chat, and "Change trip details"", on `dev`, pushed. Blocking secret scan: 0 matches.
+
+**Changes**
+- `tests/test_integration.py`:
+  - The docstring now covers both tests, the LLM call budget (about 9 calls) and the rule "check facts, never reply text".
+  - New `PAUSE_SECONDS` (env `INTEGRATION_PAUSE`, default 6) between turns, for per-minute limits.
+  - New test `test_phase3_conversation_reaches_selection_and_can_change_details`, on real Neon + the configured model, through `build_graph`:
+    - greeting;
+    - a preferences message → hills / calm / food / slow, `phase == constraints`;
+    - a trip message with an explicit date (today + 45 days, with the year) → Pune, that date, 4 nights, 2 adults, 60000, `["train"]`, `phase == selection`, no problems;
+    - `CHANGE_DETAILS` → `constraints`;
+    - "Make it 6 nights please." → `selection`, nights 6, budget kept;
+    - 5 non-empty AI replies.
+    - The trip is deleted in `finally`, and the deletion is checked.
+- `Docs/LLD.md`:
+  - Companion links fixed (`HLD.md`, `Architecture.md`). The status line now says Phases 0 to 3 match.
+  - Module layout: `llm.py` is now "any OpenAI-compatible API (Gemini)"; `models.py`, `profiler.py` and `constraints.py` are marked Phase 3; new `extraction.py` line.
+  - `TripInputs.children: int | None = Field(None, …)` with the reason; `TravelState` gains `trip_problems` and `trip_edit_turn`.
+  - Node table rows for `wait_for_user`, `constraints` and `chat` updated (change-details action, past-date handling and blocking, per-turn `build_prompt()`).
+- `Docs/HLD.md`, `Docs/Architecture.md`: links changed to the real file names (`Architecture.md`, `LLD.md`, `HLD.md`). **Open issue 2 fixed.** Every `](x.md|png)` link in `Docs/` was checked against an existing file: all ok.
+
+**Verification**
+- `uv run pytest -q` → **102 passed, 2 skipped** (both integration tests skip by default).
+- `RUN_INTEGRATION=1 uv run pytest tests/test_integration.py -v` → **2 passed in 90.1 s** on `gemini-3.5-flash-lite` + Neon. The 5 warnings are the known Pydantic `parsed` serializer warnings.
+- App started for the user's browser check: `uv run streamlit run app.py --server.port 8501 --server.headless true` (background); `/_stcore/health` → ok.
+
+**Manual browser checklist (for the user)**
+1. Open http://localhost:8501. The greeting appears and the URL gets `?trip=<uuid>`.
+2. Describe the trip you want (setting, mood, interests, pace). Replies stream in and ask one thing at a time.
+3. Give trip details over one or more messages. A past date (e.g. "1st October") should be explained and asked again.
+4. Once complete: a summary, and the "✏️ Change trip details" button appears.
+5. Click it: the current details are listed. Change something: the button comes back.
+6. Copy the URL into a new tab: the conversation reloads.
+7. "New trip" in the sidebar starts a fresh conversation.
+
+**Next steps**
+1. The user does the browser checklist; Phase 3 is marked done after that.
+2. Commit Step 7.
+3. Open decisions: the production LLM quota (open issue 10), rotating the exposed Gemini key (open issue 9), a friendlier message when the daily quota is used up.

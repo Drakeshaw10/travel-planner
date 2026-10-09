@@ -8,7 +8,7 @@ The browser only talks to the Streamlit app; the app makes every outside call, a
 
 ![System architecture: 1 app, 1 database, 5 external services](architecture.png)
 
-The Mermaid version of this diagram, plus the agent graph, is in [architecture.md](architecture.md).
+The Mermaid version of this diagram, plus the agent graph, is in [Architecture.md](Architecture.md).
 
 The LangGraph engine (highlighted) is the core: it saves state to Neon after every step and hands each turn to the right agent.
 
@@ -54,7 +54,7 @@ Every user message is one graph run that ends at the next `interrupt()`; the che
 3. After 3 rounds it accepts the closest plan and marks it `best_effort`.
 4. The writer turns the priced plan into a day-by-day itinerary with a cost table and each price's source and age.
 
-[architecture.md](architecture.md) draws the agent graph; [lld.md](lld.md) lists every node and edge.
+[Architecture.md](Architecture.md) draws the agent graph; [LLD.md](LLD.md) lists every node and edge.
 
 ## Data stores
 

@@ -2,7 +2,7 @@
 
 One Streamlit app talks to Neon Postgres and five outside services. The browser only talks to the app, and Neon is the one place state lives, so a sleeping or redeployed app loses nothing.
 
-See [hld.md](hld.md) for the components and flows, and [lld.md](lld.md) for the detail behind each box.
+See [HLD.md](HLD.md) for the components and flows, and [LLD.md](LLD.md) for the detail behind each box.
 
 ## System view
 

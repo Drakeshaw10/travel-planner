@@ -1,12 +1,12 @@
 # Low-level design
 
-Companion docs: [hld.md](hld.md) and [architecture.md](architecture.md).
+Companion docs: [HLD.md](HLD.md) and [Architecture.md](Architecture.md).
 
-This document specifies each module, node, algorithm and table precisely enough to code from. Phases 0 to 2 already match it; later phases fill in the rest.
+This document specifies each module, node, algorithm and table precisely enough to code from. Phases 0 to 3 already match it, including the Phase 3 changes marked below; later phases fill in the rest.
 
 ## Module layout
 
-Imports only point downward: `ui` calls `graph`, nodes call `tools`, tools call `cache`, and only `llm.py`, `db.py` and `cache.py` touch secrets. Files marked (Phase 2) already exist.
+Imports only point downward: `ui` calls `graph`, nodes call `tools`, tools call `cache`, and only `llm.py`, `db.py` and `cache.py` touch secrets. Files marked (Phase 2) or (Phase 3) already exist.
 
 ```text
 travel-planner/
@@ -17,20 +17,21 @@ travel-planner/
     itinerary.py            # day-by-day view and cost table
     debug.py                # sidebar state inspector, dev only
   planner/
-    llm.py                  # (Phase 2) get_llm(): cached ChatOpenAI on the HF router
+    llm.py                  # (Phase 2) get_llm(): cached ChatOpenAI on any OpenAI-compatible API (Gemini)
     db.py                   # (Phase 2) get_checkpointer(): pool + PostgresSaver
     cache.py                # cached_fetch(), quota_left(), log_usage()
-    models.py               # Pydantic: Preferences, TripInputs, Candidate, PricedItem
+    models.py               # (Phase 3) Pydantic: Preferences, TripInputs; later Candidate, PricedItem
     pricing.py              # distance_km(), cost_floor(), daily_spend_items()
     scoring.py              # score_destination(), rank()
     graph/
       state.py              # (Phase 2) TravelState
       build.py              # (Phase 2) build_graph(llm, checkpointer)
       nodes/
-        chat.py             # (Phase 2) greet, wait_for_user, chat
+        chat.py             # (Phase 2, 3) greet, wait_for_user, chat with build_prompt()
         orchestrator.py     # (Phase 2) route() and every other conditional edge
-        profiler.py
-        constraints.py
+        extraction.py       # (Phase 3) extract(): structured call, one retry on a parse error
+        profiler.py         # (Phase 3)
+        constraints.py      # (Phase 3)
         scorer.py
         feasibility.py
         shortlist.py
@@ -74,7 +75,7 @@ class TripInputs(BaseModel):
     start_date: date | None = None
     nights: int | None = Field(None, ge=1, le=14)
     adults: int | None = Field(None, ge=1, le=6)
-    children: int = Field(0, ge=0, le=4)
+    children: int | None = Field(None, ge=0, le=4)  # Phase 3: None = not said, so 0 is a real answer
     budget_inr: int | None = Field(None, gt=0)      # total for the whole group
     modes: list[Literal["flight", "train", "bus"]] = []
 
@@ -122,6 +123,9 @@ class TravelState(TypedDict):
     budget_feedback: NotRequired[str]
     validation_status: NotRequired[Literal["ok", "best_effort"]]
     itinerary_md: NotRequired[str]
+    # Added in Phase 3:
+    trip_problems: NotRequired[list[str]]      # why constraints rejected a value this turn
+    trip_edit_turn: NotRequired[int]           # user turn on which "Change trip details" was clicked
 ```
 
 Logistics and experience run in parallel but write different keys, so no reducer is needed beyond `add_messages`.
@@ -133,10 +137,10 @@ Thirteen nodes; only `chat` and `writer` stream text to the user, so `app.py` fi
 | Node | Reads | Writes | Calls | LLM use |
 | --- | --- | --- | --- | --- |
 | `greet` | nothing | greeting message, `phase=discovery` | none | none |
-| `wait_for_user` | nothing | the user's `HumanMessage`, `user_turns + 1` | `interrupt("waiting_for_user")` | none |
+| `wait_for_user` | nothing | the user's `HumanMessage`, `user_turns + 1`; for the "Change trip details" action also `phase=constraints`, `trip_edit_turn` | `interrupt("waiting_for_user")` | none |
 | `profiler` | last 10 messages, `preferences` | merged `preferences`; `phase=constraints` once complete or after 6 turns | LLM | `with_structured_output(Preferences)` |
-| `constraints` | last 10 messages, `trip` | merged `trip`; `phase=selection` once nothing is missing | LLM | `with_structured_output(TripInputs)` |
-| `chat` | `phase`, `preferences`, `trip.missing()` | the next question as an `AIMessage` | LLM | streamed reply, one question at a time |
+| `constraints` | last 10 messages, `trip`, today's date | merged `trip`, `trip_problems` (past start dates are dropped and explained); `phase=selection` once nothing is missing, no problem is open and it isn't the edit turn | LLM | `with_structured_output(TripInputs)` |
+| `chat` | `phase`, `preferences`, `trip.missing()`, `trip_problems`, `trip_edit_turn` | the next question as an `AIMessage` | LLM | streamed reply, one question at a time; instructions built per turn by `build_prompt()` |
 | `scorer` | `preferences`, `trip.start_date`, `destinations` table | top 10 `candidates` | `scoring.rank()` | none |
 | `feasibility` | `candidates`, `trip`, `origins` table | top 5 that fit the budget, each with `floor_inr` and `typical_inr` | `pricing.cost_floor()` | none |
 | `shortlist` | `candidates`, `preferences` | `reason` per candidate | LLM | one structured call for all reasons |
